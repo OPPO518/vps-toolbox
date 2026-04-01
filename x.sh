@@ -70,6 +70,10 @@ update_script() {
     git reset --hard origin/main >/dev/null 2>&1
     if git pull origin main; then
         echo -e "${gl_lv}更新成功！正在重启工具箱...${gl_bai}"
+        
+        # 【新增的修复代码】每次拉取完，重新给自己赋予执行权限
+        chmod +x "$BASE_DIR/x.sh"
+        
         sleep 1
         # 重新执行自身，加载最新的模块
         exec /usr/local/bin/x
