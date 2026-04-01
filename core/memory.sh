@@ -7,20 +7,21 @@
 swap_management() {
     while true; do
         clear
-        echo -e "${gl_kjlan}################################################"
+        echo -e "${gl_kjlan}#################################################"
         echo -e "#  进阶内存管理 (ZRAM 压缩 + 智能 I/O 测速兜底) #"
-        echo -e "################################################${gl_bai}"
+        echo -e "#################################################${gl_bai}"
         
         # 状态采集
         local total_mem=$(free -m | awk '/^Mem:/{print $2}')
         local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}已启用${gl_bai}" || echo -e "${gl_hong}未启用${gl_bai}")
-        local swap_total=$(free -m | awk '/^Swap:/{print $2}')
+        local swap_total=$(free -m | grep Swap | awk '{print $2}')
         local trim_timer=$(systemctl is-active fstrim.timer 2>/dev/null | grep -q "active" && echo -e "${gl_lv}已开启(每周)${gl_bai}" || echo -e "${gl_huang}未开启${gl_bai}")
         
-        # 修正：更严谨的 Trim 硬件支持检测
+        # 修正版：更安静、更通用的 Trim 检测
+        # 我们抓取所有设备的 DISC-MAX 列，只要有不为 0B 的，就认为硬件支持
+        local trim_check=$(lsblk -nd -o DISC-MAX 2>/dev/null | awk '$1 != "0B" {print $1}' | head -n 1)
         local trim_support=""
-        # 检查根分区挂载点的 DISC-MAX 是否不等于 0B
-        if [[ $(lsblk -nd -o DISC-MAX / | tr -d ' ') != "0B" ]]; then
+        if [ -n "$trim_check" ]; then
             trim_support="${gl_lv}支持${gl_bai}"
         else
             trim_support="${gl_huang}未知/不支持${gl_bai}"
