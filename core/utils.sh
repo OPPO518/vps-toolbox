@@ -92,3 +92,25 @@ ensure_port_open() {
         fi
     fi
 }
+
+# 通用进度条渲染函数
+# 使用: draw_bar <百分比> <条长>
+draw_bar() {
+    local perc=$1
+    local size=$2
+    # 兼容处理：如果百分比为空或不是数字，设为 0
+    [[ ! "$perc" =~ ^[0-9]+$ ]] && perc=0
+    
+    local inc=$(( perc * size / 100 ))
+    local out=""
+    local color=$gl_lv # 默认绿色
+
+    # 根据百分比切换颜色 (高负载变色)
+    if [ "$perc" -gt 85 ]; then color=$gl_hong; elif [ "$perc" -gt 60 ]; then color=$gl_huang; fi
+
+    # 构建条形
+    for ((i=0; i<size; i++)); do
+        if [ $i -lt $inc ]; then out="${out}■"; else out="${out} "; fi
+    done
+    printf "${color}[%-s] %3d%%${gl_bai}" "$out" "$perc"
+}
