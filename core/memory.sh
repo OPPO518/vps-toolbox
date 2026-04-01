@@ -14,11 +14,17 @@ swap_management() {
         # 状态采集
         local total_mem=$(free -m | awk '/^Mem:/{print $2}')
         local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}已启用${gl_bai}" || echo -e "${gl_hong}未启用${gl_bai}")
-        local swap_total=$(free -m | grep Swap | awk '{print $2}')
-        
-        # 新增：检测 fstrim 定时任务和硬件支持
+        local swap_total=$(free -m | awk '/^Swap:/{print $2}')
         local trim_timer=$(systemctl is-active fstrim.timer 2>/dev/null | grep -q "active" && echo -e "${gl_lv}已开启(每周)${gl_bai}" || echo -e "${gl_huang}未开启${gl_bai}")
-        local trim_support=$(lsblk -D | grep -q " 0B" || echo -e "${gl_lv}支持${gl_bai}" && echo -e "${gl_huang}未知/不支持${gl_bai}")
+        
+        # 修正：更严谨的 Trim 硬件支持检测
+        local trim_support=""
+        # 检查根分区挂载点的 DISC-MAX 是否不等于 0B
+        if [[ $(lsblk -nd -o DISC-MAX / | tr -d ' ') != "0B" ]]; then
+            trim_support="${gl_lv}支持${gl_bai}"
+        else
+            trim_support="${gl_huang}未知/不支持${gl_bai}"
+        fi
 
         echo -e " 物理内存: ${gl_kjlan}${total_mem} MB${gl_bai}"
         echo -e " ZRAM 状态: ${zram_status}"
