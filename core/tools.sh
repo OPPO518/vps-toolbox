@@ -1,79 +1,75 @@
 #!/bin/bash
 
-# ==========================================
-#  系统辅助工具模块 (信息/更新/清理)
-# ==========================================
-
 linux_info() {
-    clear
-    echo -e "${gl_huang}正在采集系统信息...${gl_bai}"
-    ip_address
+    # 隐藏光标，增加沉浸感
+    tput civis
+    
+    # 捕获 Ctrl+C，恢复光标并退出
+    trap 'tput cnorm; echo -e "\n${gl_lv}已安全退出监控模式。${gl_bai}"; sleep 1; return' SIGINT
 
-    local cpu_info=$(lscpu | awk -F': +' '/Model name:/ {print $2; exit}')
-    local cpu_usage_percent=$(awk '{u=$2+$4; t=$2+$4+$5; if (NR==1){u1=u; t1=t;} else printf "%.0f\n", (($2+$4-u1) * 100 / (t-t1))}' \
-        <(grep 'cpu ' /proc/stat) <(sleep 1; grep 'cpu ' /proc/stat))
-    local cpu_cores=$(nproc)
-    local cpu_freq=$(cat /proc/cpuinfo | grep "MHz" | head -n 1 | awk '{printf "%.1f GHz\n", $4/1000}')
-    local mem_info=$(free -b | awk 'NR==2{printf "%.2f/%.2fM (%.2f%%)", $3/1024/1024, $2/1024/1024, $3*100/$2}')
-    local disk_info=$(df -h | awk '$NF=="/"{printf "%s/%s (%s)", $3, $2, $5}')
-    
-    local ipinfo=$(curl -s ipinfo.io)
-    local country=$(echo "$ipinfo" | grep 'country' | awk -F': ' '{print $2}' | tr -d '",')
-    local city=$(echo "$ipinfo" | grep 'city' | awk -F': ' '{print $2}' | tr -d '",')
-    local isp_info=$(echo "$ipinfo" | grep 'org' | awk -F': ' '{print $2}' | tr -d '",')
-    
-    local load=$(uptime | awk '{print $(NF-2), $(NF-1), $NF}')
-    local dns_addresses=$(awk '/^nameserver/{printf "%s ", $2} END {print ""}' /etc/resolv.conf)
-    local cpu_arch=$(uname -m)
-    local hostname=$(uname -n)
-    local kernel_version=$(uname -r)
-    local congestion_algorithm=$(sysctl -n net.ipv4.tcp_congestion_control)
-    local queue_algorithm=$(sysctl -n net.core.default_qdisc)
-    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
-    
-    output_status
-    
-    local current_time=$(date "+%Y-%m-%d %I:%M %p")
-    local swap_info=$(free -m | awk 'NR==3{used=$3; total=$2; if (total == 0) {percentage=0} else {percentage=used*100/total}; printf "%dM/%dM (%d%%)", used, total, percentage}')
-    local runtime=$(cat /proc/uptime | awk -F. '{run_days=int($1 / 86400);run_hours=int(($1 % 86400) / 3600);run_minutes=int(($1 % 3600) / 60); if (run_days > 0) printf("%d天 ", run_days); if (run_hours > 0) printf("%d时 ", run_hours); printf("%d分\n", run_minutes)}')
-    local timezone=$(current_timezone)
-    local tcp_count=$(ss -t | wc -l)
-    local udp_count=$(ss -u | wc -l)
+    while true; do
+        # --- 1. 数据实时采集 ---
+        ip_address >/dev/null 2>&1
+        output_status >/dev/null 2>&1
+        
+        # 负载与 CPU
+        local cpu_perc=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}' | cut -d. -f1)
+        local load=$(uptime | awk -F'load average:' '{print $2}' | sed 's/ //')
+        
+        # 内存与 Swap
+        local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+        local mem_used=$(free -m | awk '/^Mem:/{print $3}')
+        local mem_perc=$(( mem_used * 100 / mem_total ))
+        
+        local swap_total=$(free -m | awk '/^Swap:/{print $2}')
+        local swap_used=$(free -m | awk '/^Swap:/{print $3}')
+        local swap_perc=0; [ "$swap_total" -gt 0 ] && swap_perc=$(( swap_used * 100 / swap_total ))
+        
+        # 磁盘
+        local disk_info_raw=$(df -h / | awk 'NR==2 {print $3,$2,$5}')
+        local disk_used_text=$(echo $disk_info_raw | awk '{print $1}')
+        local disk_total_text=$(echo $disk_info_raw | awk '{print $2}')
+        local disk_perc=$(echo $disk_info_raw | awk '{print $3}' | tr -d '%')
 
-    echo ""
-    echo -e "${gl_lv}系统信息概览${gl_bai}"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}主机名:         ${gl_bai}$hostname ($country_code $flag)"
-    echo -e "${gl_kjlan}系统版本:       ${gl_bai}$os_info"
-    echo -e "${gl_kjlan}Linux版本:      ${gl_bai}$kernel_version"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}CPU架构:        ${gl_bai}$cpu_arch"
-    echo -e "${gl_kjlan}CPU型号:        ${gl_bai}$cpu_info"
-    echo -e "${gl_kjlan}CPU核心数:      ${gl_bai}$cpu_cores"
-    echo -e "${gl_kjlan}CPU频率:        ${gl_bai}$cpu_freq"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}CPU占用:        ${gl_bai}$cpu_usage_percent%"
-    echo -e "${gl_kjlan}系统负载:       ${gl_bai}$load"
-    echo -e "${gl_kjlan}TCP|UDP连接数:  ${gl_bai}$tcp_count|$udp_count"
-    echo -e "${gl_kjlan}物理内存:       ${gl_bai}$mem_info"
-    echo -e "${gl_kjlan}虚拟内存:       ${gl_bai}$swap_info"
-    echo -e "${gl_kjlan}硬盘占用:       ${gl_bai}$disk_info"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}总接收:         ${gl_bai}$rx"
-    echo -e "${gl_kjlan}总发送:         ${gl_bai}$tx"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}网络算法:       ${gl_bai}$congestion_algorithm $queue_algorithm"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}运营商:         ${gl_bai}$isp_info"
-    if [ -n "$ipv4_address" ]; then echo -e "${gl_kjlan}IPv4地址:       ${gl_bai}$ipv4_address"; fi
-    if [ -n "$ipv6_address" ]; then echo -e "${gl_kjlan}IPv6地址:       ${gl_bai}$ipv6_address"; fi
-    echo -e "${gl_kjlan}DNS地址:        ${gl_bai}$dns_addresses"
-    echo -e "${gl_kjlan}地理位置:       ${gl_bai}$country $city"
-    echo -e "${gl_kjlan}系统时间:       ${gl_bai}$timezone $current_time"
-    echo -e "${gl_kjlan}-------------"
-    echo -e "${gl_kjlan}运行时长:       ${gl_bai}$runtime"
-    echo
-    read -r -p "按回车键返回..."
+        # 连接与时长
+        local tcp_count=$(ss -t | wc -l)
+        local udp_count=$(ss -u | wc -l)
+        local runtime=$(uptime -p | sed 's/up //')
+
+        # --- 2. 仪表盘渲染 ---
+        echo -ne "\033[H\033[2J" # 彻底清屏并复位
+        echo -e "${gl_bai}┌──────────────────────────────────────────────────────────┐"
+        echo -e "│  ${gl_kjlan}VPS 实时运维仪表盘${gl_bai} (按 ${gl_hong}Ctrl+C${gl_bai} 退出)             │"
+        echo -e "└──────────────────────────────────────────────────────────┘"
+
+        # 资源监控区
+        echo -e "${gl_lv}[ 资源负载监控 ]${gl_bai}"
+        printf "  CPU 占用:  " && draw_bar $cpu_perc 30 && echo -e " ${gl_hui}Load: $load${gl_bai}"
+        printf "  物理内存:  " && draw_bar $mem_perc 30 && echo -e " ${gl_hui}$mem_used/$mem_total MB${gl_bai}"
+        printf "  虚拟内存:  " && draw_bar $swap_perc 30 && echo -e " ${gl_hui}$swap_used/$swap_total MB${gl_bai}"
+        printf "  磁盘空间:  " && draw_bar $disk_perc 30 && echo -e " ${gl_hui}$disk_used_text/$disk_total_text${gl_bai}"
+        echo -e "${gl_hui}------------------------------------------------------------${gl_bai}"
+
+        # 网络与流量区
+        echo -e "${gl_kjlan}[ 网络传输统计 ]${gl_bai}"
+        echo -e "  下载总计 (RX): ${gl_lv}%-15s${gl_bai} 上传总计 (TX): ${gl_lv}%-15s${gl_bai}" "$rx" "$tx"
+        echo -e "  TCP 连接数  : ${gl_lan}%-15s${gl_bai} UDP 连接数  : ${gl_lan}%-15s${gl_bai}" "$tcp_count" "$udp_count"
+        echo -e "  网卡算法    : ${gl_bai}%-15s${gl_bai} 调度器      : ${gl_bai}%-15s${gl_bai}" "$(sysctl -n net.ipv4.tcp_congestion_control)" "$(sysctl -n net.core.default_qdisc)"
+        echo -e "${gl_hui}------------------------------------------------------------${gl_bai}"
+
+        # 身份与地理区
+        echo -e "${gl_huang}[ 节点身份信息 ]${gl_bai}"
+        echo -e "  主机/系统: $(hostname) | $(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')"
+        echo -e "  IPv4/v6  : ${gl_lan}${ipv4_address:-N/A}${gl_bai} / ${gl_lan}${ipv6_address:-N/A}${gl_bai}"
+        echo -e "  运营商   : $isp_info"
+        echo -e "  地理位置 : $flag $country $city"
+        echo -e "  运行时长 : $runtime"
+        
+        echo -e "${gl_hui}------------------------------------------------------------${gl_bai}"
+        echo -ne "  ${gl_hui}最后刷新时间: $(date "+%Y-%m-%d %H:%M:%S")${gl_bai}"
+
+        sleep 1
+    done
 }
 
 linux_update() {
