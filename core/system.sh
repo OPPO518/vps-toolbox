@@ -1,7 +1,7 @@
 system_initialize() {
     clear
     echo -e "${gl_kjlan}################################################"
-    echo -e "#         系统初始化与网络调优 (Debian Only)   #"
+    echo -e "#     系统初始化、时钟同步与网络调优 (Debian)  #"
     echo -e "################################################${gl_bai}"
     
     # --- 1. 系统版本严格校验 ---
@@ -18,9 +18,7 @@ system_initialize() {
         return
     fi
 
-    echo -e "${gl_kjlan}>>> 正在执行基础环境部署与 APT 换源...${gl_bai}"
-    
-    # 备份并替换为官方源 (Debian 默认源)
+    echo -e "${gl_kjlan}>>> 正在配置 Debian 官方源...${gl_bai}"
     [ -f /etc/apt/sources.list ] && mv /etc/apt/sources.list /etc/apt/sources.list.bak_$(date +%F)
     if [ "$os_ver" == "11" ]; then
         echo -e "deb http://deb.debian.org/debian bullseye main contrib non-free\ndeb http://deb.debian.org/debian bullseye-updates main contrib non-free\ndeb http://security.debian.org/debian-security bullseye-security main contrib non-free\ndeb http://archive.debian.org/debian bullseye-backports main contrib non-free" > /etc/apt/sources.list
@@ -28,37 +26,54 @@ system_initialize() {
         echo -e "deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware\ndeb http://deb.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware\ndeb http://deb.debian.org/debian/ bookworm-updates main contrib non-free non-free-firmware\ndeb http://deb.debian.org/debian/ bookworm-backports main contrib non-free non-free-firmware" > /etc/apt/sources.list
     fi
 
-    # 更新并安装必备组件
+    # --- 2. 系统升级与工具安装 ---
+    echo -e "${gl_kjlan}>>> 正在更新系统并安装基础组件...${gl_bai}"
     export DEBIAN_FRONTEND=noninteractive
-    apt update && apt upgrade -y -o Dpkg::Options::="--force-confold"
-    apt install curl wget systemd-timesyncd socat cron rsync unzip -y
+    apt update && apt upgrade -y -o Dpkg::Options::="--force-confold" --ignore-missing
+    # 直接安装 chrony 等运维必备工具 (去掉 systemd-timesyncd)
+    apt install wget rsync socat chrony unzip -y
 
-    # 设置时区
+    # --- 3. 时间同步与时区配置 (Chrony 高精度方案) ---
+    echo -e "${gl_kjlan}>>> 正在配置时区与 Chrony 高可用同步源...${gl_bai}"
     timedatectl set-timezone Asia/Shanghai
-    systemctl enable --now systemd-timesyncd
 
-    # --- 2. 动态计算内存并分配 TCP 缓冲区 ---
+    # 停止并彻底屏蔽系统自带的 timesyncd，防止双服务冲突
+    systemctl stop systemd-timesyncd 2>/dev/null
+    systemctl mask systemd-timesyncd.service
+
+    # 备份默认配置并清理自带 NTP 节点
+    [ -f /etc/chrony/chrony.conf ] && cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak
+    sed -i 's/^pool/#pool/g' /etc/chrony/chrony.conf
+    sed -i 's/^server/#server/g' /etc/chrony/chrony.conf
+
+    # 写入公共高可用 NTP 节点 (Cloudflare + Google 容灾)
+    cat >> /etc/chrony/chrony.conf << EOF
+
+# 自定义高可用 NTP 服务器 (Cloudflare + Google)
+server time.cloudflare.com iburst
+server time.google.com iburst
+EOF
+
+    systemctl enable --now chrony
+    systemctl restart chrony
+
+    # --- 4. 动态计算内存并分配 TCP 缓冲区 ---
     echo -e "${gl_kjlan}>>> 正在计算物理内存并分配 TCP 缓冲区...${gl_bai}"
-    
-    # 一行代码优雅获取总内存(单位:MB)
     local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    local buf_max="33554432" # 默认 fallback 为 32MB
+    local buf_max="33554432" # 默认 32MB
     
     if [ "$total_mem" -le 600 ]; then
-        # 384MB ~ 512MB 极限小鸡 -> 8MB 极度保守策略
         buf_max="8388608"
         echo -e "检测到极小内存 (${total_mem}MB)，采用保守缓冲区策略 (8MB)"
     elif [ "$total_mem" -le 2048 ]; then
-        # 1GB ~ 2GB 常规机器 -> 32MB 均衡策略
         buf_max="33554432"
         echo -e "检测到标准内存 (${total_mem}MB)，采用均衡缓冲区策略 (32MB)"
     else
-        # 4GB ~ 24GB 甚至更大 -> 64MB 激进策略
         buf_max="67108864"
         echo -e "检测到大容量内存 (${total_mem}MB)，采用激进缓冲区策略 (64MB)"
     fi
 
-    # --- 3. 写入 TCP 深度调优与 BBR 配置 ---
+    # --- 5. 写入 TCP 深度调优与 BBR 配置 ---
     echo -e "${gl_kjlan}>>> 正在写入 TCP 深度调优与 BBR 配置...${gl_bai}"
     rm -f /etc/sysctl.d/99-vps-optimize.conf
     
@@ -126,19 +141,27 @@ root hard nofile 1000000
 EOF
     fi
 
-    # 应用 sysctl 参数 (过滤掉旧内核不支持 nf_conntrack 的报错，防止刷屏)
     sysctl --system 2>/dev/null | grep -v "nf_conntrack" >/dev/null
 
-    # --- 4. 初始化报告 ---
-    echo -e "\n${gl_lv}====== 初始化与调优报告 ======${gl_bai}"
+    # --- 6. 垃圾清理 ---
+    echo -e "${gl_kjlan}>>> 正在清理系统缓存垃圾...${gl_bai}"
+    apt autoremove -y && apt clean
+
+    # --- 7. 初始化报告 ---
+    echo -e "\n${gl_lv}====== 基建、网络优化与时钟同步已就绪 ======${gl_bai}"
     local bbr_status=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
     local cur_wmem=$(sysctl -n net.core.wmem_max 2>/dev/null)
     local wmem_mb=$((cur_wmem / 1024 / 1024))
+    local fw_v4=$(sysctl -n net.ipv4.ip_forward 2>/dev/null)
+    local fw_v6=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
     
     echo -e " 1. BBR 拥塞控制: \t${gl_kjlan}${bbr_status}${gl_bai}"
     echo -e " 2. TCP 缓冲上限: \t${gl_kjlan}${wmem_mb} MB${gl_bai}"
-    echo -e " 3. 系统网络转发: \t${gl_huang}保持默认状态${gl_bai}"
+    echo -e " 3. 系统网络转发: \t${gl_bai}v4->${fw_v4} v6->${fw_v6}${gl_bai}"
     echo -e " 4. 当前系统时间: \t${gl_bai}$(date "+%Y-%m-%d %H:%M:%S") (CST)${gl_bai}"
+    echo -e "------------------------------------------------"
+    echo -e "${gl_huang} Chrony 同步源状态 (chronyc sources -v):${gl_bai}"
+    chronyc sources -v
     echo -e "------------------------------------------------"
     
     if [ -f /var/run/reboot-required ]; then
