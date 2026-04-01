@@ -16,9 +16,14 @@ swap_management() {
         local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}已启用${gl_bai}" || echo -e "${gl_hong}未启用${gl_bai}")
         local swap_total=$(free -m | grep Swap | awk '{print $2}')
         
+        # 新增：检测 fstrim 定时任务和硬件支持
+        local trim_timer=$(systemctl is-active fstrim.timer 2>/dev/null | grep -q "active" && echo -e "${gl_lv}已开启(每周)${gl_bai}" || echo -e "${gl_huang}未开启${gl_bai}")
+        local trim_support=$(lsblk -D | grep -q " 0B" || echo -e "${gl_lv}支持${gl_bai}" && echo -e "${gl_huang}未知/不支持${gl_bai}")
+
         echo -e " 物理内存: ${gl_kjlan}${total_mem} MB${gl_bai}"
         echo -e " ZRAM 状态: ${zram_status}"
         echo -e " 总交换量: ${gl_kjlan}${swap_total} MB${gl_bai}"
+        echo -e " 自动 Trim: ${trim_timer} | 硬件支持: ${trim_support}"
         echo -e "------------------------------------------------"
         echo -e "${gl_lv} 1.${gl_bai} 一键部署/更新 智能内存优化 (推荐)"
         echo -e "${gl_hong} 2.${gl_bai} 彻底卸载 ZRAM 与 Swapfile"
