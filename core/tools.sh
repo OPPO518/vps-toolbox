@@ -1,74 +1,70 @@
 #!/bin/bash
 
 linux_info() {
-    clear
-    echo -e "${gl_huang}正在深度采集系统数据...${gl_bai}"
-    
-    # 基础数据采集 (依赖 utils.sh 里的函数)
-    ip_address
-    output_status
-    
-    # 1. 实时负载计算
-    local cpu_perc=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}' | cut -d. -f1)
-    
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    local mem_used=$(free -m | awk '/^Mem:/{print $3}')
-    local mem_perc=$(( mem_used * 100 / mem_total ))
-    
-    local swap_total=$(free -m | awk '/^Swap:/{print $2}')
-    local swap_used=$(free -m | awk '/^Swap:/{print $3}')
-    local swap_perc=0
-    [ "$swap_total" -gt 0 ] && swap_perc=$(( swap_used * 100 / swap_total ))
-    
-    local disk_info_raw=$(df -h / | awk 'NR==2 {print $3,$2,$5}')
-    local disk_used_text=$(echo $disk_info_raw | awk '{print $1}')
-    local disk_total_text=$(echo $disk_info_raw | awk '{print $2}')
-    local disk_perc=$(echo $disk_info_raw | awk '{print $3}' | tr -d '%')
+    # 提醒用户如何退出
+    echo -e "${gl_huang}正在进入实时监控模式，按 【Ctrl+C】 停止并返回菜单...${gl_bai}"
+    sleep 1
 
-    # 2. 其他静态信息
-    local cpu_info=$(lscpu | awk -F': +' '/Model name:/ {print $2; exit}')
-    local cpu_cores=$(nproc)
-    local cpu_freq=$(cat /proc/cpuinfo | grep "MHz" | head -n 1 | awk '{printf "%.1f GHz", $4/1000}')
-    local load=$(uptime | awk -F'load average:' '{print $2}' | sed 's/ //')
-    local dns_addresses=$(awk '/^nameserver/{printf "%s ", $2} END {print ""}' /etc/resolv.conf)
-    local tcp_count=$(ss -t | wc -l)
-    local udp_count=$(ss -u | wc -l)
-    local runtime=$(uptime -p | sed 's/up //')
-    local os_info=$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')
-    local congestion_algorithm=$(sysctl -n net.ipv4.tcp_congestion_control)
-    local queue_algorithm=$(sysctl -n net.core.default_qdisc)
+    # 使用 trap 捕获中断信号，确保用户按 Ctrl+C 时能优雅退出循环
+    trap 'break' SIGINT
 
-    # 3. 渲染界面
-    echo -e "\n${gl_lv}========== 实时资源负载 (Resource Load) ==========${gl_bai}"
-    printf "${gl_kjlan}%-10s${gl_bai} " "CPU 占用:" && draw_bar $cpu_perc 25 && echo -e " (负载: $load)"
-    printf "${gl_kjlan}%-10s${gl_bai} " "物理内存:" && draw_bar $mem_perc 25 && echo -e " ($mem_used/$mem_total MB)"
-    printf "${gl_kjlan}%-10s${gl_bai} " "虚拟内存:" && draw_bar $swap_perc 25 && echo -e " ($swap_used/$swap_total MB)"
-    printf "${gl_kjlan}%-10s${gl_bai} " "硬盘空间:" && draw_bar $disk_perc 25 && echo -e " ($disk_used_text/$disk_total_text)"
+    while true; do
+        # 1. 数据采集与负载计算 (移动到循环内)
+        ip_address >/dev/null 2>&1
+        output_status >/dev/null 2>&1
+        
+        local cpu_perc=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}' | cut -d. -f1)
+        local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+        local mem_used=$(free -m | awk '/^Mem:/{print $3}')
+        local mem_perc=$(( mem_used * 100 / mem_total ))
+        
+        local swap_total=$(free -m | awk '/^Swap:/{print $2}')
+        local swap_used=$(free -m | awk '/^Swap:/{print $3}')
+        local swap_perc=0
+        [ "$swap_total" -gt 0 ] && swap_perc=$(( swap_used * 100 / swap_total ))
+        
+        local disk_info_raw=$(df -h / | awk 'NR==2 {print $3,$2,$5}')
+        local disk_used_text=$(echo $disk_info_raw | awk '{print $1}')
+        local disk_total_text=$(echo $disk_info_raw | awk '{print $2}')
+        local disk_perc=$(echo $disk_info_raw | awk '{print $3}' | tr -d '%')
 
-    echo -e "\n${gl_lv}========== 硬件与系统信息 (Hardware) ==========${gl_bai}"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "主机名称" "$(hostname) ($country_code $flag)"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "操作系统" "$os_info"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "内核版本" "$(uname -r)"
-    echo -e "${gl_hui}------------------------------------------------${gl_bai}"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "CPU 架构" "$(uname -m)"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "CPU 型号" "$cpu_info"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "核心/频率" "$cpu_cores 核 / $cpu_freq"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s / %s\n" "总流量" "RX: $rx" "TX: $tx"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "连接统计" "$tcp_count (TCP) | $udp_count (UDP)"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s %s\n" "网络算法" "$congestion_algorithm" "$queue_algorithm"
+        local load=$(uptime | awk -F'load average:' '{print $2}' | sed 's/ //')
+        local tcp_count=$(ss -t | wc -l)
+        local udp_count=$(ss -u | wc -l)
+        local runtime=$(uptime -p | sed 's/up //')
 
-    echo -e "\n${gl_lv}========== 网络与地理信息 (Network) ==========${gl_bai}"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "运营商" "$isp_info"
-    [ -n "$ipv4_address" ] && printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "IPv4地址" "$ipv4_address"
-    [ -n "$ipv6_address" ] && printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "IPv6地址" "$ipv6_address"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "DNS 地址" "$dns_addresses"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s %s\n" "地理位置" "$country" "$city"
-    echo -e "${gl_hui}------------------------------------------------${gl_bai}"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "系统时间" "$(date "+%Y-%m-%d %H:%M:%S") ($(current_timezone))"
-    printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "运行时长" "$runtime"
-    
-    echo ""
-    read -r -p "按回车键返回主菜单..."
+        # 2. 渲染界面 (使用 \033[H 清屏复位，实现无闪烁刷新)
+        echo -ne "\033[H\033[2J" 
+        echo -e "${gl_lv}========== 实时资源负载 (按 Ctrl+C 退出) ==========${gl_bai}"
+        printf "${gl_kjlan}%-10s${gl_bai} " "CPU 占用:" && draw_bar $cpu_perc 25 && echo -e " (负载: $load)"
+        printf "${gl_kjlan}%-10s${gl_bai} " "物理内存:" && draw_bar $mem_perc 25 && echo -e " ($mem_used/$mem_total MB)"
+        printf "${gl_kjlan}%-10s${gl_bai} " "虚拟内存:" && draw_bar $swap_perc 25 && echo -e " ($swap_used/$swap_total MB)"
+        printf "${gl_kjlan}%-10s${gl_bai} " "硬盘空间:" && draw_bar $disk_perc 25 && echo -e " ($disk_used_text/$disk_total_text)"
+
+        echo -e "\n${gl_lv}========== 硬件与系统信息 (Hardware) ==========${gl_bai}"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "主机名称" "$(hostname) ($country_code $flag)"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "操作系统" "$(grep PRETTY_NAME /etc/os-release | cut -d '=' -f2 | tr -d '"')"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "内核版本" "$(uname -r)"
+        echo -e "${gl_hui}------------------------------------------------${gl_bai}"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s / %s\n" "总流量" "RX: $rx" "TX: $tx"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "连接统计" "$tcp_count (TCP) | $udp_count (UDP)"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s %s\n" "网络算法" "$(sysctl -n net.ipv4.tcp_congestion_control)" "$(sysctl -n net.core.default_qdisc)"
+
+        echo -e "\n${gl_lv}========== 网络与地理信息 (Network) ==========${gl_bai}"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "运营商" "$isp_info"
+        [ -n "$ipv4_address" ] && printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "IPv4地址" "$ipv4_address"
+        [ -n "$ipv6_address" ] && printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "IPv6地址" "$ipv6_address"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "系统时间" "$(date "+%Y-%m-%d %H:%M:%S")"
+        printf "${gl_kjlan}%-12s${gl_bai}: %s\n" "运行时长" "$runtime"
+
+        # 3. 刷新频率 (1秒)
+        sleep 1
+    done
+
+    # 退出循环后清除 trap 信号并返回
+    trap - SIGINT
+    echo -e "\n${gl_huang}已退出监控模式。${gl_bai}"
+    sleep 1
 }
 
 linux_update() {
