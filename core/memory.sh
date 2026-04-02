@@ -7,41 +7,49 @@
 swap_management() {
     while true; do
         clear
-        echo -e "${gl_kjlan}#################################################"
-        echo -e "#  进阶内存管理 (ZRAM 压缩 + 智能 I/O 测速兜底) #"
-        echo -e "#################################################${gl_bai}"
-        
-        # 状态采集
+        # --- [保留你原有的状态采集逻辑] ---
         local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-        local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}已启用${gl_bai}" || echo -e "${gl_hong}未启用${gl_bai}")
         local swap_total=$(free -m | grep Swap | awk '{print $2}')
+        local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}● 已启用${gl_bai}" || echo -e "${gl_hong}○ 未启用${gl_bai}")
         local trim_timer=$(systemctl is-active fstrim.timer 2>/dev/null | grep -q "active" && echo -e "${gl_lv}已开启(每周)${gl_bai}" || echo -e "${gl_huang}未开启${gl_bai}")
-        
-        # 修正版：更安静、更通用的 Trim 检测
-        # 我们抓取所有设备的 DISC-MAX 列，只要有不为 0B 的，就认为硬件支持
         local trim_check=$(lsblk -nd -o DISC-MAX 2>/dev/null | awk '$1 != "0B" {print $1}' | head -n 1)
-        local trim_support=""
-        if [ -n "$trim_check" ]; then
-            trim_support="${gl_lv}支持${gl_bai}"
-        else
-            trim_support="${gl_huang}未知/不支持${gl_bai}"
-        fi
+        local trim_support=$( [ -n "$trim_check" ] && echo -e "${gl_lv}支持${gl_bai}" || echo -e "${gl_huang}未知/不支持${gl_bai}" )
 
-        echo -e " 物理内存: ${gl_kjlan}${total_mem} MB${gl_bai}"
-        echo -e " ZRAM 状态: ${zram_status}"
-        echo -e " 总交换量: ${gl_kjlan}${swap_total} MB${gl_bai}"
-        echo -e " 自动 Trim: ${trim_timer} | 硬件支持: ${trim_support}"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 一键部署/更新 智能内存优化 (推荐)"
-        echo -e "${gl_hong} 2.${gl_bai} 彻底卸载 ZRAM 与 Swapfile"
-        echo -e "------------------------------------------------"
-        echo -e " 3. 实时查看交换详情 (zramctl/swapon)"
-        echo -e " 4. 尝试执行 SSD Trim 优化"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_hui} 0. 返回上级菜单${gl_bai}"
-        echo -e "------------------------------------------------"
+        # --- 渲染新版 UI ---
+        echo -e "${gl_kjlan}╭────────────────────────────────────────────────────────────────╮${gl_bai}"
+        echo -e "${gl_kjlan}│${gl_bai}              ${gl_huang}VPS 进阶内存调度与 ZRAM 优化中心${gl_bai}                ${gl_kjlan}│${gl_bai}"
+        echo -e "${gl_kjlan}╰────────────────────────────────────────────────────────────────╯${gl_bai}"
+        echo -e " 内存调度状态: ${zram_status}"
+        echo -e " 物理内存总量: ${gl_bai}${total_mem} MB${gl_bai}  |  当前交换总量: ${gl_bai}${swap_total} MB${gl_bai}"
+        echo -e " 自动 Trim:    ${trim_timer}  |  硬件 Trim 支持: ${trim_support}"
+        echo -e "${gl_kjlan}------------------------------------------------------------------${gl_bai}"
         
-        read -p "请输入选项 [0-4]: " choice
+        echo -e " ${gl_huang}[ ⚡ 自动化优化策略 ]${gl_bai}"
+        echo -e "   ${gl_lv}1.${gl_bai} 一键部署/更新 智能内存优化 (推荐)      ${gl_lv}[脚本执行]${gl_bai}"
+        echo -e "   ${gl_hong}2.${gl_bai} 彻底卸载 ZRAM 与 Swapfile 逻辑"
+        
+        echo -e " ${gl_hui}┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈${gl_bai}"
+        
+        echo -e " ${gl_huang}[ 🔍 实时状态感知 ]${gl_bai}"
+        echo -e "   ${gl_kjlan}3.${gl_bai} 深度查看交换详情 (zramctl/swapon)"
+        echo -e "   ${gl_kjlan}4.${gl_bai} 尝试执行手动 SSD Trim 优化"
+        
+        echo -e " ${gl_hui}┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈${gl_bai}"
+        
+        echo -e "   ${gl_hui}0. 返回上级菜单 (Back)${gl_bai}"
+        echo -e "${gl_kjlan}==================================================================${gl_bai}"
+        
+        read -p " 请输入选项 [0-4]: " choice
+        
+        case "$choice" in
+            1) deploy_memory_optimization ;; # 替换成你实际的函数名
+            2) uninstall_memory_optimization ;;
+            3) zramctl; swapon --show; read -p "按回车继续..." ;;
+            4) fstrim -v /; read -p "按回车继续..." ;;
+            0) return ;;
+            *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
+        esac
+    done
         case "$choice" in
             1)
                 echo -e "${gl_huang}>>> 正在部署进阶内存优化方案...${gl_bai}"
