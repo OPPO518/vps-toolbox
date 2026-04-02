@@ -251,26 +251,40 @@ EOF
     # === Fail2ban 主菜单路由 ===
     while true; do
         clear
-        echo -e "${gl_kjlan}################################################"
-        echo -e "#              Fail2ban 防暴力破解管理         #"
-        echo -e "################################################${gl_bai}"
-        
+        # 动态获取状态颜色
+        local f2b_status_text=""
         if systemctl is-active --quiet fail2ban; then
-            echo -e "当前状态: ${gl_lv}运行中 (Running)${gl_bai}"
+            f2b_status_text="${gl_lv}● 运行中 (Active)${gl_bai}"
         else
-            echo -e "当前状态: ${gl_hong}未运行 / 未安装${gl_bai}"
+            f2b_status_text="${gl_hong}○ 未运行 (Inactive)${gl_bai}"
         fi
+
+        echo -e "${gl_kjlan}╭────────────────────────────────────────────────────────────────╮${gl_bai}"
+        echo -e "${gl_kjlan}│${gl_bai}              ${gl_huang}Fail2ban 暴力破解防护中心${gl_bai}                  ${gl_kjlan}│${gl_bai}"
+        echo -e "${gl_kjlan}╰────────────────────────────────────────────────────────────────╯${gl_bai}"
+        echo -e " 核心服务状态: $f2b_status_text"
+        echo -e "${gl_kjlan}------------------------------------------------------------------${gl_bai}"
         
-        echo -e "------------------------------------------------"
-        echo -e "${gl_lv} 1.${gl_bai} 安装/重置 Fail2ban (Install/Reset)"
-        echo -e "${gl_huang} 2.${gl_bai} 白名单管理中心 (Whitelist Manager) ${gl_lv}[New]${gl_bai}"
-        echo -e "${gl_huang} 3.${gl_bai} 封禁查看与解封中心 (Unban Center) ${gl_lv}[New]${gl_bai}"
-        echo -e "${gl_lv} 4.${gl_bai} 实时查看攻击日志 (View Log)"
-        echo -e "${gl_hong} 5.${gl_bai} 完全卸载 Fail2ban (Uninstall)"
-        echo -e "------------------------------------------------"
-        echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
+        echo -e " ${gl_huang}[ 📥 部署与维护 ]${gl_bai}"
+        echo -e "   ${gl_lv}1.${gl_bai} 安装 / 重置服务 (Install/Reset)"
+        echo -e "   ${gl_hong}5.${gl_bai} 完全卸载组件 (Uninstall)"
         
-        read -p "请输入选项: " f2b_choice
+        echo -e " ${gl_hui}┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈${gl_bai}"
+        
+        echo -e " ${gl_huang}[ 🛡️  安全与策略 ]${gl_bai}"
+        echo -e "   ${gl_kjlan}2.${gl_bai} 白名单管理中心 (Whitelist)           ${gl_lv}[常用]${gl_bai}"
+        echo -e "   ${gl_kjlan}3.${gl_bai} 封禁查看与解封 (Unban Center)         ${gl_lv}[常用]${gl_bai}"
+        
+        echo -e " ${gl_hui}┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈${gl_bai}"
+        
+        echo -e " ${gl_huang}[ 📊 监控与分析 ]${gl_bai}"
+        echo -e "   ${gl_hui}4.${gl_bai} 实时查看攻击日志 (Monitor Log)"
+        
+        echo -e "\n   ${gl_hui}0. 返回主菜单 (Back)${gl_bai}"
+        echo -e "${gl_kjlan}==================================================================${gl_bai}"
+        
+        read -p " 请输入选项: " f2b_choice
+        # ... 后面原有的 case 逻辑不变 ...
 
         case "$f2b_choice" in
             1) install_fail2ban; read -p "按回车继续..." ;;
