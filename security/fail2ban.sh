@@ -260,10 +260,10 @@ EOF
         fi
 
         echo -e "${gl_kjlan}╭────────────────────────────────────────────────────────────────╮${gl_bai}"
-        echo -e "${gl_kjlan}│${gl_bai}              ${gl_huang}Fail2ban 暴力破解防护中心${gl_bai}                  ${gl_kjlan}│${gl_bai}"
+        echo -e "${gl_kjlan}│${gl_bai}                Fail2ban 暴力破解防护中心                  ${gl_kjlan}│${gl_bai}"
         echo -e "${gl_kjlan}╰────────────────────────────────────────────────────────────────╯${gl_bai}"
         echo -e " 核心服务状态: $f2b_status_text"
-        echo -e "${gl_kjlan}------------------------------------------------------------------${gl_bai}"
+        echo -e "${gl_kjlan}==================================================================${gl_bai}"
         
         echo -e " ${gl_huang}[ 📥 部署与维护 ]${gl_bai}"
         echo -e "   ${gl_lv}1.${gl_bai} 安装 / 重置服务 (Install/Reset)"
