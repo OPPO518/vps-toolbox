@@ -83,7 +83,7 @@ update_script() {
     fi
 }
 
-# === [辅助函数] 绘制动态进度条 ===
+# === [辅助函数] 绘制动态进度条 (箭头推进版) ===
 draw_bar() {
     local percent=$1
     local length=10
@@ -94,8 +94,12 @@ draw_bar() {
     [ "$percent" -gt 60 ] && bar_color="${gl_huang}"
     [ "$percent" -gt 80 ] && bar_color="${gl_hong}"
     
-    local filled_str=$(printf "%${filled}s" | tr ' ' '█')
-    local empty_str=$(printf "%${empty}s" | tr ' ' '░')
+    # 构造箭头：如果 filled 大于 0，最后一位换成 >
+    local filled_str=""
+    if [ "$filled" -gt 0 ]; then
+        filled_str=$(printf "%$((filled-1))s" | tr ' ' '=')">"
+    fi
+    local empty_str=$(printf "%${empty}s" | tr ' ' '.')
     
     echo -e "${bar_color}${filled_str}${gl_hui}${empty_str}${gl_bai}"
 }
