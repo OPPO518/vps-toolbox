@@ -13,11 +13,10 @@ detect_ssh_port() {
     echo "${port:-22}"
 }
 
-# [核心引擎] 声明式重建 (绝不产生重复规则，绝不误杀 Docker/Fail2ban)
+# [核心引擎] 纯粹的本机入站防护表
 rebuild_nftables() {
     local ssh_p=$(detect_ssh_port)
     
-    # 动态组装端口集合
     local tcp_ports=""
     local udp_ports=""
     [ -s "$NFT_TCP_LIST" ] && tcp_ports=$(paste -sd "," "$NFT_TCP_LIST")
@@ -31,6 +30,7 @@ table inet my_firewall {}
 delete table inet my_firewall
 
 table inet my_firewall {
+    # 纯粹的入站流量控制台
     chain input {
         type filter hook input priority 0; policy drop;
 
@@ -38,33 +38,23 @@ table inet my_firewall {
         ct state established,related accept
         ct state invalid drop
         
-        # 放行 Ping (ICMP)
+        # 放行 Ping
         icmp type echo-request accept
         icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
         
-        # 强制放行当前 SSH 端口防失联
+        # 系统防自锁
         tcp dport $ssh_p accept
 EOF
 
-    # 动态注入自定义 TCP/UDP 端口
     [ -n "$tcp_ports" ] && echo "        tcp dport { $tcp_ports } accept" >> /etc/nftables.conf
     [ -n "$udp_ports" ] && echo "        udp dport { $udp_ports } accept" >> /etc/nftables.conf
 
-    # 封尾并彻底开放转发
     cat >> /etc/nftables.conf << 'EOF'
     }
-
-    chain forward {
-        # 开放底层转发，为后续独立中转模块铺路
-        type filter hook forward priority 0; policy accept;
-    }
-
-    chain output {
-        type filter hook output priority 0; policy accept;
-    }
 }
+# 注: forward 和 output 链已彻底移除，由系统或未来中转模块接管
 EOF
-    # 直接加载，不中断现有网络
+    
     nft -f /etc/nftables.conf
     systemctl enable nftables >/dev/null 2>&1
 }
