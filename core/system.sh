@@ -33,6 +33,38 @@ system_initialize() {
     # 直接安装 chrony 等运维必备工具 (去掉 systemd-timesyncd)
     apt install wget rsync socat chrony unzip -y
 
+# [系统优化] SSH 深度安全加固与稳定性优化
+optimize_ssh() {
+    echo -e "${gl_kjlan}>>> 正在执行 SSH 深度安全加固与稳定性优化...${gl_bai}"
+    local ssh_conf="/etc/ssh/sshd_config"
+    
+    # 备份原始配置
+    [ ! -f "${ssh_conf}.bak" ] && cp "$ssh_conf" "${ssh_conf}.bak"
+
+    # 1. 稳定性与速度优化 (心跳包 + 禁用 DNS 反查)
+    sed -i 's/^#\?ClientAliveInterval.*/ClientAliveInterval 60/' "$ssh_conf"
+    sed -i 's/^#\?ClientAliveCountMax.*/ClientAliveCountMax 5/' "$ssh_conf"
+    sed -i 's/^#\?UseDNS.*/UseDNS no/' "$ssh_conf"
+
+    # 2. 安全认证加固 (缩短宽限时间 + 限制尝试次数)
+    sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 1m/' "$ssh_conf"
+    sed -i 's/^#\?MaxAuthTries.*/MaxAuthTries 3/' "$ssh_conf"
+    sed -i 's/^#\?StrictModes.*/StrictModes yes/' "$ssh_conf"
+
+    # 3. 禁用不必要的功能 (防止 X11 转发漏洞 + 禁用键盘交互认证)
+    sed -i 's/^#\?X11Forwarding.*/X11Forwarding no/' "$ssh_conf"
+    sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' "$ssh_conf"
+
+    # 检查语法并重启
+    if sshd -t &>/dev/null; then
+        systemctl restart sshd
+    else
+        echo -e "${gl_hong}错误: SSH 配置语法检查失败，已回退配置！${gl_bai}"
+        cp "${ssh_conf}.bak" "$ssh_conf"
+        systemctl restart sshd
+    fi
+}
+    
     # --- 3. 时间同步与时区配置 (Chrony 高精度方案) ---
     echo -e "${gl_kjlan}>>> 正在配置时区与 Chrony 高可用同步源...${gl_bai}"
     timedatectl set-timezone Asia/Shanghai
