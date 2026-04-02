@@ -1,6 +1,20 @@
 #!/bin/bash
 
+# [输入校验] 验证 IP 地址合法性 (复用防火墙的防线)
+validate_ip() {
+    local ip=$1
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
+    if [[ "$ip" =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then return 0; fi
+    return 1
+}
+
 fail2ban_management() {
+    # 局部作用域定义，确保模块独立运行不报错
+    detect_ssh_port() {
+        local port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' | head -n 1)
+        echo "${port:-22}"
+    }
+
     install_fail2ban() {
         local ssh_port=$(detect_ssh_port)
         echo -e "${gl_huang}=== Fail2ban 安装向导 ===${gl_bai}"
@@ -18,6 +32,7 @@ fail2ban_management() {
         systemctl enable --now rsyslog
         touch /var/log/auth.log /var/log/fail2ban.log
 
+        # 完美适配 Nftables 框架
         cat > /etc/fail2ban/jail.d/00-default-nftables.conf << EOF
 [DEFAULT]
 banaction = nftables-multiport
@@ -73,9 +88,16 @@ EOF
     unban_ip() {
         read -p "请输入要解封的 IP: " target_ip
         if [ -n "$target_ip" ]; then
-            fail2ban-client set sshd unbanip $target_ip
-            fail2ban-client set recidive unbanip $target_ip
-            echo -e "${gl_lv}尝试解封指令已发送。${gl_bai}"
+            # 加入严格的 IP 格式校验防线
+            if validate_ip "$target_ip"; then
+                fail2ban-client set sshd unbanip "$target_ip" >/dev/null 2>&1
+                fail2ban-client set recidive unbanip "$target_ip" >/dev/null 2>&1
+                echo -e "${gl_lv}解封指令已发送！(如果 IP 曾被封禁，现已放行)${gl_bai}"
+            else
+                echo -e "${gl_hong}错误: 无效的 IP 地址格式！${gl_bai}"
+            fi
+        else
+            echo -e "${gl_huang}未输入 IP，操作取消。${gl_bai}"
         fi
     }
 
@@ -121,12 +143,13 @@ EOF
                 systemctl disable fail2ban
                 apt purge fail2ban -y
                 rm -rf /etc/fail2ban /var/log/fail2ban.log
-                nft delete table inet f2b-table 2>/dev/null
+                # 清除 Fail2ban 在 Nftables 留下的表结构
+                nft delete table inet fail2ban 2>/dev/null
                 echo -e "${gl_lv}卸载完成。${gl_bai}"
                 read -p "按回车继续..."
                 ;;
             0) return ;;
-            *) echo "无效选项" ;;
+            *) echo "无效选项"; sleep 1 ;;
         esac
     done
 }
