@@ -15,7 +15,7 @@ swap_management() {
 
         # --- 渲染新版 UI ---
         echo -e "${gl_kjlan}╭────────────────────────────────────────────────────────────────╮${gl_bai}"
-        echo -e "${gl_kjlan}│${gl_bai}              ${gl_huang}VPS 进阶内存调度与 ZRAM 优化中心${gl_bai}                ${gl_kjlan}│${gl_bai}"
+        echo -e "${gl_kjlan}│${gl_bai}               VPS 进阶内存调度与 ZRAM 优化中心               ${gl_kjlan}│${gl_bai}"
         echo -e "${gl_kjlan}╰────────────────────────────────────────────────────────────────╯${gl_bai}"
         echo -e " 内存调度状态: ${zram_status}"
         echo -e " 物理内存总量: ${gl_bai}${total_mem} MB${gl_bai}  |  当前交换总量: ${gl_bai}${swap_total} MB${gl_bai}"
