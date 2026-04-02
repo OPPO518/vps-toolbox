@@ -263,18 +263,40 @@ nftables_management() {
                     echo "1. 删除全网放行规则"
                     echo "2. 删除定向 IP 规则"
                     read -p "请选择 (1/2): " del_type
+                    
                     if [ "$del_type" == "1" ]; then
                         read -p "请输入要删除的 [端口号] 以移除对应的全局规则: " port
-                        sed -i "/ ${port}$/d" "$NFT_GLOBAL_LIST" 2>/dev/null
-                        rebuild_nftables
-                        echo -e "${gl_lv}包含端口 ${port} 的全局规则已移除。${gl_bai}"
+                        # 1. 检查输入合法性
+                        if ! validate_port "$port"; then
+                            echo -e "${gl_hong}错误: 端口格式不合法！${gl_bai}"
+                        # 2. 检查记录是否存在
+                        elif grep -q " ${port}$" "$NFT_GLOBAL_LIST" 2>/dev/null; then
+                            sed -i "/ ${port}$/d" "$NFT_GLOBAL_LIST"
+                            rebuild_nftables
+                            echo -e "${gl_lv}包含端口 ${port} 的全局规则已成功移除。${gl_bai}"
+                        else
+                            # 3. 不存在时的反馈
+                            echo -e "${gl_huang}提示: 规则列表中未找到关于端口 ${port} 的记录。${gl_bai}"
+                        fi
+                        
                     elif [ "$del_type" == "2" ]; then
                         read -p "请输入要删除的 [IP 地址] 以移除对应的定向规则: " ip
-                        sed -i "/^${ip} /d" "$NFT_IP_LIST" 2>/dev/null
-                        rebuild_nftables
-                        echo -e "${gl_lv}包含 IP ${ip} 的定向规则已移除。${gl_bai}"
+                        # 1. 检查 IP 合法性
+                        if ! validate_ip "$ip"; then
+                            echo -e "${gl_hong}错误: IP 地址格式不合法！${gl_bai}"
+                        # 2. 检查记录是否存在
+                        elif grep -q "^${ip} " "$NFT_IP_LIST" 2>/dev/null; then
+                            sed -i "/^${ip} /d" "$NFT_IP_LIST"
+                            rebuild_nftables
+                            echo -e "${gl_lv}包含 IP ${ip} 的定向规则已成功移除。${gl_bai}"
+                        else
+                            # 3. 不存在时的反馈
+                            echo -e "${gl_huang}提示: 规则列表中未找到关于 IP ${ip} 的记录。${gl_bai}"
+                        fi
+                    else
+                        echo -e "${gl_hong}无效的选择！${gl_bai}"
                     fi
-                    sleep 1
+                    sleep 2
                 fi
                 ;;
             4)
