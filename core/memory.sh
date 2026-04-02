@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # ==========================================
 #  内存管理模块 (ZRAM + 智能 Swapfile)
 # ==========================================
@@ -7,7 +5,7 @@
 swap_management() {
     while true; do
         clear
-        # --- [保留你原有的状态采集逻辑] ---
+        # --- [状态采集逻辑] ---
         local total_mem=$(free -m | awk '/^Mem:/{print $2}')
         local swap_total=$(free -m | grep Swap | awk '{print $2}')
         local zram_status=$(lsmod | grep -q zram && echo -e "${gl_lv}● 已启用${gl_bai}" || echo -e "${gl_hong}○ 未启用${gl_bai}")
@@ -41,15 +39,6 @@ swap_management() {
         
         read -p " 请输入选项 [0-4]: " choice
         
-        case "$choice" in
-            1) deploy_memory_optimization ;; # 替换成你实际的函数名
-            2) uninstall_memory_optimization ;;
-            3) zramctl; swapon --show; read -p "按回车继续..." ;;
-            4) fstrim -v /; read -p "按回车继续..." ;;
-            0) return ;;
-            *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
-        esac
-    done
         case "$choice" in
             1)
                 echo -e "${gl_huang}>>> 正在部署进阶内存优化方案...${gl_bai}"
