@@ -292,10 +292,9 @@ nftables_management() {
                         read -p "请输入起始跳跃端口 (例: 10000): " start
                         read -p "请输入结束跳跃端口 (例: 20000): " end
                         read -p "请输入真实目标端口 (例: 443): " target                  
+                        # 使用我们新写的 validate_port 函数，并确保 start 小于 end
                         if validate_port "$start" && validate_port "$end" && validate_port "$target" && [ "$start" -lt "$end" ]; then
-                            # 预警检查 ... 后续代码不变
-                        if [[ "$start" =~ ^[0-9]+$ ]] && [[ "$end" =~ ^[0-9]+$ ]] && [[ "$target" =~ ^[0-9]+$ ]]; then
-                            # 预警检查
+                            # 预警检查：防止跳跃范围误伤 546 端口
                             if [ "$start" -le 546 ] && [ "$end" -ge 546 ]; then
                                 echo -e "${gl_hong}警告: 范围包含了 IPv6 生命线 (UDP 546)，系统已拒绝该范围！${gl_bai}"
                             else
@@ -304,7 +303,7 @@ nftables_management() {
                                 echo -e "${gl_lv}端口跳跃引擎已启动！流量已被重定向至 $target。${gl_bai}"
                             fi
                         else
-                            echo -e "${gl_hong}端口格式错误！${gl_bai}"
+                            echo -e "${gl_hong}端口格式错误！(请确保输入的是合法数字，且起始端口小于结束端口)${gl_bai}"
                         fi
                     fi
                     sleep 2
