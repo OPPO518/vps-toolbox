@@ -76,32 +76,181 @@ linux_info() {
     read -r -p "按回车键返回..."
 }
 
-linux_update() {
-    echo -e "${gl_huang}正在进行系统更新...${gl_bai}"
-    if command -v apt &>/dev/null; then
-        apt update -y && apt full-upgrade -y
-        if [ -f /var/run/reboot-required ]; then
-            echo -e "${gl_hong}注意：检测到内核或核心组件更新，需要重启才能生效！${gl_bai}"
-            read -p "是否立即重启系统？(y/n): " reboot_choice
-            [[ "$reboot_choice" =~ ^[yY]$ ]] && reboot || echo -e "${gl_huang}已取消重启，请稍后手动重启。${gl_bai}"
-        else
-            echo -e "${gl_lv}系统更新完成！${gl_bai}"
-        fi
-    else
-        echo -e "${gl_hong}错误：未检测到 apt！${gl_bai}"
+# ==========================================
+#  系统维护模块: 智能更新与深度清理
+# ==========================================
+
+# [底层防线] 检查是否有其他包管理器在运行，防止 dpkg 锁死报错
+check_apt_lock() {
+    if ps -C apt,apt-get,dpkg >/dev/null 2>&1; then
+        echo -e "${gl_hong}错误: 系统当前正有其他更新任务运行中 (apt/dpkg 锁定)！${gl_bai}"
+        echo -e "${gl_huang}请等待后台自动任务（如 unattended-upgrades）完成，或稍后再试。${gl_bai}"
+        return 1
     fi
-    read -p "按回车键返回..."
+    return 0
 }
 
+# === [ 模块 1: 智能系统更新 ] ===
+linux_update() {
+    check_apt_lock || { read -p "按回车键返回..."; return; }
+    
+    clear
+    echo -e "${gl_kjlan}################################################"
+    echo -e "#           系统智能更新与安全管理             #"
+    echo -e "################################################${gl_bai}"
+    echo -e "${gl_huang}>>> 正在后台拉取最新软件源状态，请稍候...${gl_bai}"
+    
+    # 静默拉取更新列表，获取准确的待更新包数量
+    apt-get update -qq
+    local pending_updates=$(apt list --upgradable 2>/dev/null | grep -v "Listing" | grep -v "^$" | wc -l)
+    
+    if [ "$pending_updates" -eq 0 ]; then
+        echo -e "当前状态: ${gl_lv}系统已是最新，无待处理更新。${gl_bai}"
+    else
+        echo -e "当前状态: ${gl_huang}发现 $pending_updates 个可用更新包。${gl_bai}"
+    fi
+
+    echo -e "------------------------------------------------"
+    echo -e "${gl_lv} 1.${gl_bai} 执行完整系统升级 (Full Upgrade)"
+    echo -e "${gl_lv} 2.${gl_bai} 仅下载更新包备用 (静默缓存，不立即安装)"
+    echo -e "${gl_hui} 0.${gl_bai} 返回上级菜单"
+    echo -e "------------------------------------------------"
+    read -p "请输入选项: " up_choice
+
+    case "$up_choice" in
+        1)
+            echo -e "${gl_kjlan}>>> 正在执行深度升级...${gl_bai}"
+            export DEBIAN_FRONTEND=noninteractive
+            # 强制保留旧配置文件，防止覆写用户的个性化设置
+            apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+            
+            # --- 深度感知：检查是否需要重启 ---
+            local need_reboot=0
+            if [ -f /var/run/reboot-required ]; then
+                echo -e "${gl_hong}注意：检测到核心组件更新，已触发重启标记！${gl_bai}"
+                need_reboot=1
+            fi
+            
+            # 交叉比对内核：当前运行内核 vs 最新已安装内核
+            local current_kernel=$(uname -r)
+            local installed_kernel=$(dpkg --list | grep -E '^ii  linux-image-[0-9]+' | awk '{print $2}' | sed 's/linux-image-//g' | sort -V | tail -n 1)
+            if [[ "$current_kernel" != "$installed_kernel"* ]] && [ -n "$installed_kernel" ]; then
+                echo -e "${gl_huang}提示：新内核 ($installed_kernel) 已部署，当前仍在运行旧内核 ($current_kernel)。${gl_bai}"
+                need_reboot=1
+            fi
+
+            if [ "$need_reboot" -eq 1 ]; then
+                read -p "是否立即重启系统以应用底层更新？(y/n): " reboot_choice
+                [[ "$reboot_choice" =~ ^[yY]$ ]] && reboot || echo -e "${gl_huang}已挂起重启操作，请记得稍后手动重启。${gl_bai}"
+            else
+                echo -e "${gl_lv}升级完成，当前系统运行完美！${gl_bai}"
+                read -p "按回车键返回..."
+            fi
+            ;;
+        2)
+            echo -e "${gl_kjlan}>>> 正在后台静默下载更新包...${gl_bai}"
+            apt-get full-upgrade -d -y >/dev/null 2>&1
+            echo -e "${gl_lv}下载完成！缓存已保存在系统内，下次执行升级将实现秒级安装。${gl_bai}"
+            read -p "按回车键返回..."
+            ;;
+        0) return ;;
+        *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
+    esac
+}
+
+# === [ 模块 2: 深度系统清理 ] ===
 linux_clean() {
-    echo -e "${gl_huang}正在进行系统清理...${gl_bai}"
-    if command -v apt &>/dev/null; then
-        apt autoremove --purge -y && apt clean -y && apt autoclean -y
-    fi
-    if command -v journalctl &>/dev/null; then
-        journalctl --rotate && journalctl --vacuum-time=1s && journalctl --vacuum-size=50M
-    fi
-    find /tmp -type f -atime +10 -delete 2>/dev/null
-    echo -e "${gl_lv}清理完成！${gl_bai}"
-    read -p "按回车键返回..."
+    check_apt_lock || { read -p "按回车键返回..."; return; }
+    
+    clear
+    echo -e "${gl_kjlan}################################################"
+    echo -e "#           系统空间深度扫描与治理             #"
+    echo -e "################################################${gl_bai}"
+    
+    # 抓取磁盘与日志状态
+    local root_usage=$(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')
+    local root_avail=$(df -h / | awk 'NR==2 {print $4}')
+    local journal_size=$(journalctl --disk-usage 2>/dev/null | awk '{print $6$7}')
+    local apt_cache=$(du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}')
+    
+    echo -e "系统盘使用率: \c"
+    if [ "$root_usage" -gt 80 ]; then echo -e "${gl_hong}${root_usage}% (告警: 空间不足, 仅剩 ${root_avail})${gl_bai}"
+    elif [ "$root_usage" -gt 50 ]; then echo -e "${gl_huang}${root_usage}% (良好: 剩余 ${root_avail})${gl_bai}"
+    else echo -e "${gl_lv}${root_usage}% (健康: 剩余 ${root_avail})${gl_bai}"; fi
+    
+    echo -e "日志缓存占用: ${gl_huang}${journal_size:-未知}${gl_bai}"
+    echo -e "APT 包缓存区: ${gl_huang}${apt_cache:-0B}${gl_bai}"
+    echo -e "------------------------------------------------"
+    echo -e "${gl_lv} 1.${gl_bai} 智能安全清理 (推荐: 清理缓存、废弃依赖、过期归档日志)"
+    echo -e "${gl_hong} 2.${gl_bai} 极限深度清理 (危险: 强制清空所有活动日志与 Docker 碎屑)"
+    echo -e "${gl_hui} 0.${gl_bai} 返回上级菜单"
+    echo -e "------------------------------------------------"
+    read -p "请输入选项: " cl_choice
+
+    case "$cl_choice" in
+        1)
+            echo -e "${gl_kjlan}>>> 正在执行智能安全清理...${gl_bai}"
+            export DEBIAN_FRONTEND=noninteractive
+            
+            echo "1. 卸载无用依赖与旧版内核..."
+            apt-get autoremove --purge -y >/dev/null 2>&1
+            apt-get clean -y
+            
+            echo "2. 清理 10 天以上的陈旧临时文件..."
+            find /tmp -type f -atime +10 -delete 2>/dev/null
+            
+            echo "3. 移除系统产生的历史压缩日志..."
+            find /var/log -type f -name "*.gz" -delete 2>/dev/null
+            find /var/log -type f -name "*.[0-9]" -delete 2>/dev/null
+            
+            if command -v journalctl &>/dev/null; then
+                echo "4. 瘦身守护进程日志 (保留近 3 天日志)..."
+                journalctl --rotate >/dev/null 2>&1
+                journalctl --vacuum-time=3d >/dev/null 2>&1
+                journalctl --vacuum-size=50M >/dev/null 2>&1
+            fi
+            
+            echo -e "${gl_lv}智能清理完成！系统负担已有效减轻。${gl_bai}"
+            read -p "按回车键返回..."
+            ;;
+        2)
+            echo -e "${gl_hong}警告: 这将清空所有正在记录的审计日志，通常仅在重置环境或磁盘彻底爆满时使用！${gl_bai}"
+            read -p "确认执行极限清理吗？(y/n): " confirm_extreme
+            if [[ "$confirm_extreme" =~ ^[yY]$ ]]; then
+                export DEBIAN_FRONTEND=noninteractive
+                
+                # 基础深度清理
+                apt-get autoremove --purge -y >/dev/null 2>&1
+                apt-get clean -y
+                find /tmp -type f -delete 2>/dev/null
+                
+                # [核心技巧] 清空普通活动日志 (保持句柄不失效，直接截断文件大小到 0)
+                echo "正在截断并清空核心系统日志..."
+                for log in /var/log/syslog /var/log/messages /var/log/auth.log /var/log/kern.log /var/log/daemon.log /var/log/dpkg.log; do
+                    [ -f "$log" ] && truncate -s 0 "$log"
+                done
+                rm -f /var/log/*.gz /var/log/*.[0-9] 2>/dev/null
+                
+                # 极其暴力的 Journal 瘦身 (仅保留 1 秒日志)
+                if command -v journalctl &>/dev/null; then
+                    journalctl --rotate >/dev/null 2>&1
+                    journalctl --vacuum-time=1s >/dev/null 2>&1
+                fi
+                
+                # 针对 Docker 的额外扫描清理
+                if command -v docker &>/dev/null; then
+                    echo "正在清理 Docker 虚悬镜像与无用缓存层..."
+                    docker image prune -a -f >/dev/null 2>&1
+                    docker builder prune -f >/dev/null 2>&1
+                fi
+                
+                echo -e "${gl_lv}极限清理执行完毕！已榨干每一兆可支配的磁盘空间。${gl_bai}"
+            else
+                echo -e "${gl_huang}已取消极限清理。${gl_bai}"
+            fi
+            read -p "按回车键返回..."
+            ;;
+        0) return ;;
+        *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
+    esac
 }
