@@ -158,7 +158,7 @@ linux_update() {
     esac
 }
 
-# === [ 模块 2: 深度系统清理 ] ===
+# === [ 模块 2: 深度系统清理 (已修复取值排版Bug) ] ===
 linux_clean() {
     check_apt_lock || { read -p "按回车键返回..."; return; }
     
@@ -167,10 +167,10 @@ linux_clean() {
     echo -e "#           系统空间深度扫描与治理             #"
     echo -e "################################################${gl_bai}"
     
-    # 抓取磁盘与日志状态
+    # 抓取磁盘与日志状态 (强制 C 字符集防乱码，精准提取第 7 字段)
     local root_usage=$(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')
     local root_avail=$(df -h / | awk 'NR==2 {print $4}')
-    local journal_size=$(journalctl --disk-usage 2>/dev/null | awk '{print $6$7}')
+    local journal_size=$(LC_ALL=C journalctl --disk-usage 2>/dev/null | awk '{print $7}')
     local apt_cache=$(du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}')
     
     echo -e "系统盘使用率: \c"
