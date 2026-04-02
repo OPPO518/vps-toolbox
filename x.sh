@@ -125,9 +125,9 @@ main_menu() {
         local disk_bar=$(draw_bar "$disk_usage_pct")
 
         # --- 渲染终端 UI ---
-        echo -e "${gl_kjlan}██████████████████████████████████████████████████████████████████${gl_bai}"
-        echo -e "${gl_huang}                 Debian VPS 全息运维控制台 (Git 版)               ${gl_bai}"
-        echo -e "${gl_kjlan}██████████████████████████████████████████████████████████████████${gl_bai}"
+        echo -e "${gl_kjlan}══════════════════════════════════════════════════════════════════${gl_bai}"
+        echo -e "              ${gl_huang}❖  Debian VPS 全息运维控制台 (Git 版)  ❖${gl_bai}              "
+        echo -e "${gl_kjlan}══════════════════════════════════════════════════════════════════${gl_bai}"
         echo -e " 运行时间: ${gl_bai}${uptime_info}${gl_bai}"
         echo -e " 系统负载: ${gl_bai}${load}${gl_bai}"
         echo -e " 内存占用: ${mem_usage}% [${mem_bar}] (${mem_info})"
