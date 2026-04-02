@@ -132,7 +132,7 @@ main_menu() {
         echo -e " 系统负载: ${gl_bai}${load}${gl_bai}"
         echo -e " 内存占用: ${mem_usage}% [${mem_bar}] (${mem_info})"
         echo -e " 磁盘占用: ${disk_color}${disk_usage_pct}%${gl_bai} [${disk_bar}]${clean_warn}"
-        echo -e "${gl_kjlan}------------------------------------------------------------------${gl_bai}"
+        echo -e "${gl_kjlan}==================================================================${gl_bai}"
         
         echo -e " ${gl_huang}[ ⚙️  基础基建与系统维护 ]${gl_bai}"
         echo -e "   ${gl_lv}1.${gl_bai} 系统初始化 (Debian 基建与调优)        ${gl_hui}[system.sh]${gl_bai}"
