@@ -44,20 +44,11 @@ fail2ban_management() {
 
     install_fail2ban() {
         local ssh_port=$(detect_ssh_port)
-        echo -e "${gl_huang}=== Fail2ban 安装向导 ===${gl_bai}"
+        echo -e "${gl_huang}=== Fail2ban 极速安装向导 ===${gl_bai}"
         echo -e "当前 SSH 端口: ${gl_lv}${ssh_port}${gl_bai}"
         
-        echo -e "------------------------------------------------"
-        echo -e "${gl_huang}请输入白名单 IP (防止误封自己/中转机，支持网段如 /24)${gl_bai}"
-        read -p "留空则跳过: " whitelist_ips
-        
+        # 默认基础白名单 (仅限本地环回，后续可通过管理中心添加)
         local ignore_ip_conf="127.0.0.1/8 ::1"
-        if [ -n "$whitelist_ips" ] && validate_ip "$whitelist_ips"; then 
-            ignore_ip_conf="$ignore_ip_conf $whitelist_ips"
-        elif [ -n "$whitelist_ips" ]; then
-            echo -e "${gl_hong}IP 格式有误，自动跳过自定义白名单。您可以在安装后使用白名单管理功能添加。${gl_bai}"
-            sleep 2
-        fi
 
         echo -e "${gl_kjlan}正在安装并配置 Fail2ban...${gl_bai}"
         apt update && apt install fail2ban rsyslog -y
@@ -103,10 +94,10 @@ EOF
         systemctl enable fail2ban
 
         echo -e "${gl_lv}Fail2ban 部署完成！${gl_bai}"
-        echo -e "已启用保护: SSH端口 $ssh_port | 白名单已初始化"
+        echo -e "已启用保护: SSH端口 $ssh_port | 自定义白名单请前往 [白名单管理中心] 配置。"
         sleep 2
     }
-
+    
     # === [新增模块] 白名单独立管理 ===
     manage_whitelist() {
         while true; do
