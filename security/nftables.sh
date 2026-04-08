@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================
-#  通用防火墙模块 (Nftables 终极解耦与安全版)
+#  通用防火墙模块 (Nftables 终极解耦与集合版)
 # ==========================================
 
-NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port (例: tcp 80)
+NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port (例: tcp 80,443,5000-6000)
 NFT_IP_LIST="/etc/nft_ip_ports.list"          # 格式: ip proto port (例: 1.1.1.1 tcp 3306)
 NFT_HY2_CONF="/etc/nft_hy2_hop.conf"          # 格式: start end target (例: 10000 20000 443)
 
@@ -14,115 +14,125 @@ detect_ssh_port() {
     echo "${port:-22}"
 }
 
-# [输入校验] 验证端口号合法性 (支持单端口 80 或 范围 5000-6000)
+# [输入校验 升级版] 验证端口合法性 (支持混合输入: 80, 443, 55000:60000)
 validate_port() {
-    local p=$1
-    # 如果是纯数字单端口
-    if [[ "$p" =~ ^[0-9]+$ ]]; then
-        if [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; then return 0; else return 1; fi
-    # 如果是端口范围 (如 5000-6000)
-    elif [[ "$p" =~ ^[0-9]+-[0-9]+$ ]]; then
-        local p1=$(echo "$p" | cut -d'-' -f1)
-        local p2=$(echo "$p" | cut -d'-' -f2)
-        if [ "$p1" -ge 1 ] && [ "$p1" -le 65535 ] && [ "$p2" -ge 1 ] && [ "$p2" -le 65535 ] && [ "$p1" -lt "$p2" ]; then
-            return 0
+    local raw_input="$1"
+    
+    # [清洗] 1. 去除所有空格 2. 把中文逗号换成英文逗号 3. 把冒号换成短横线
+    local cleaned=$(echo "$raw_input" | tr -d ' ' | sed 's/，/,/g' | tr ':' '-')
+    [ -z "$cleaned" ] && return 1
+    
+    # 按照逗号分割，逐个校验
+    IFS=',' read -r -a port_array <<< "$cleaned"
+    for p in "${port_array[@]}"; do
+        # 如果是单端口
+        if [[ "$p" =~ ^[0-9]+$ ]]; then
+            if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then return 1; fi
+        # 如果是端口范围
+        elif [[ "$p" =~ ^[0-9]+-[0-9]+$ ]]; then
+            local p1=$(echo "$p" | cut -d'-' -f1)
+            local p2=$(echo "$p" | cut -d'-' -f2)
+            if [ "$p1" -lt 1 ] || [ "$p1" -gt 65535 ] || [ "$p2" -lt 1 ] || [ "$p2" -gt 65535 ] || [ "$p1" -ge "$p2" ]; then
+                return 1
+            fi
         else
-            return 1
+            return 1 # 格式既不是单端口也不是规范范围
         fi
-    else
-        return 1
-    fi
+    done
+    
+    # 校验全部通过，导出清洗后的标准格式，供外部使用
+    VALIDATED_PORT="$cleaned"
+    return 0
 }
 
 # [输入校验] 验证 IP 地址合法性 (粗略但安全地拦截乱码)
 validate_ip() {
     local ip=$1
-    # IPv4 格式检查 (仅检查结构 x.x.x.x)
     if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
-    # IPv6 格式检查 (检查是否包含冒号和合法的十六进制字符)
     if [[ "$ip" =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then return 0; fi
     return 1
 }
 
-# [核心引擎] 声明式重建 (优先级 -10，双栈兼容，附带顶级防线)
+# [核心引擎 升级版] 声明式重建 (集合化优雅排版)
 rebuild_nftables() {
     local ssh_p=$(detect_ssh_port)
-    
-    # 确保文件存在
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
-    # 生成配置头部与 Input 基础链
+    # --- 1. 动态提取并拼接全局端口列表 ---
+    local tcp_ports=""
+    local udp_ports=""
+    while read proto port; do
+        [ -z "$port" ] && continue
+        if [ "$proto" == "tcp" ] || [ "$proto" == "both" ]; then
+            # 巧妙利用参数扩展：如果有旧值，就加逗号拼接
+            tcp_ports="${tcp_ports}${tcp_ports:+, }$port"
+        fi
+        if [ "$proto" == "udp" ] || [ "$proto" == "both" ]; then
+            udp_ports="${udp_ports}${udp_ports:+, }$port"
+        fi
+    done < "$NFT_GLOBAL_LIST"
+
+    # --- 2. 注入核心配置与集合 ---
     cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
-# 1. 创建独立沙盒表
 table inet my_firewall {}
 delete table inet my_firewall
 
 table inet my_firewall {
-    # [门卫] 纯粹的入站管控
+    # [优雅声明] 全局端口池 (利用 Set 集合实现 O(1) 极速匹配)
+    set global_tcp { type inet_service; flags interval; ${tcp_ports:+elements = { $tcp_ports }; } }
+    set global_udp { type inet_service; flags interval; ${udp_ports:+elements = { $udp_ports }; } }
+
     chain input {
-        # 优先级 -10: 抢在 1Panel 和 Docker 之前做第一道安检
         type filter hook input priority -10; policy drop;
 
         # 基础通行证
         iif "lo" accept
         ct state established,related accept
         ct state invalid drop
-        
-        # [新增防线 1：畸形扫描拦截] 丢弃非法的 TCP 新连接 (只允许干净的 SYN 包建立连接)
         ct state new tcp flags & (fin|syn|rst|ack) != syn drop
 
-        # 强制放行当前 SSH 端口防失联
+        # [防失联与生命线]
         tcp dport $ssh_p accept
-
-        # [IPv6 生命线] 适配 Oracle 等云环境
         udp dport 546 accept
-        # NDP(邻居发现)必须无限制放行，否则 IPv6 会立刻断网
         icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
-
-        # [新增防线 2：原生防 CC] 限制 Ping 频率 (每秒 5 个，峰值 10 个包，多余丢弃)
         icmp type echo-request limit rate 5/second burst 10 packets accept
         icmpv6 type echo-request limit rate 5/second burst 10 packets accept
+
+        # === [集合放行区] 仅需两行，搞定所有全局端口 ===
+        tcp dport @global_tcp accept
+        udp dport @global_udp accept
 EOF
 
-    # 如果启用了 Hy2 跳跃，自动放行其目标端口，防止被 input 挡住
+    # === 3. 追加特殊规则 (Hy2 & 定向IP) ===
     if [ -f "$NFT_HY2_CONF" ]; then
         local target_port=$(awk '{print $3}' "$NFT_HY2_CONF")
         echo "        udp dport $target_port accept comment \"Hy2 Target Auto-Allow\"" >> /etc/nftables.conf
     fi
 
-    echo "        # === 以下为动态自定义放行区 ===" >> /etc/nftables.conf
-
-    # 注入：全局放行端口
-    while read proto port; do
-        [ -z "$port" ] && continue
-        if [ "$proto" == "tcp" ] || [ "$proto" == "both" ]; then
-            echo "        tcp dport $port accept" >> /etc/nftables.conf
-        fi
-        if [ "$proto" == "udp" ] || [ "$proto" == "both" ]; then
-            echo "        udp dport $port accept" >> /etc/nftables.conf
-        fi
-    done < "$NFT_GLOBAL_LIST"
-
-    # 注入：定向 IP 放行
+    echo "        # === 定向 IP 放行区 ===" >> /etc/nftables.conf
     while read ip proto port; do
         [ -z "$port" ] && continue
         local ip_type="ip"
-        [[ "$ip" =~ ":" ]] && ip_type="ip6" # 智能识别 IPv6
+        [[ "$ip" =~ ":" ]] && ip_type="ip6"
+        
+        # 将逗号分隔的端口直接包装成匿名集合 { }
+        local nft_port="$port"
+        [[ "$port" =~ "," ]] && nft_port="{ $port }"
         
         if [ "$proto" == "tcp" ] || [ "$proto" == "both" ]; then
-            echo "        $ip_type saddr $ip tcp dport $port accept" >> /etc/nftables.conf
+            echo "        $ip_type saddr $ip tcp dport $nft_port accept" >> /etc/nftables.conf
         fi
         if [ "$proto" == "udp" ] || [ "$proto" == "both" ]; then
-            echo "        $ip_type saddr $ip udp dport $port accept" >> /etc/nftables.conf
+            echo "        $ip_type saddr $ip udp dport $nft_port accept" >> /etc/nftables.conf
         fi
     done < "$NFT_IP_LIST"
 
-    # [新增防线 3：幽灵日志] 在撞墙(Policy Drop)前的一瞬间，记录被拦截的非法包
+    # === 4. 幽灵日志与封口 ===
     cat >> /etc/nftables.conf << 'EOF'
         
-        # 记录被 Drop 的日志 (默认隐藏在 dmesg 或 /var/log/kern.log 中)
+        # 兜底拦截日志
         log prefix "[Nftables-Block] " level info
     }
 EOF
@@ -172,7 +182,6 @@ list_rules_ui() {
 }
 
 nftables_management() {
-    # 进门自动检查并静默安装
     if ! command -v nft &> /dev/null; then
         echo -e "${gl_huang}>>> 正在为您静默安装 Nftables 核心组件...${gl_bai}"
         apt update -y >/dev/null 2>&1 && apt install -y nftables >/dev/null 2>&1
@@ -181,7 +190,7 @@ nftables_management() {
     while true; do
         clear
         echo -e "${gl_kjlan}################################################"
-        echo -e "#           高阶防火墙与流量调度中心           #"
+        echo -e "#            高阶防火墙与流量调度中心          #"
         echo -e "################################################${gl_bai}"
         
         if nft list tables | grep -q "my_firewall"; then
@@ -213,21 +222,24 @@ nftables_management() {
                     echo -e "${gl_lv}初始化完成！${gl_bai}"
                     sleep 1
                 else
-                    read -p "请输入要全网放行的端口 (如 80 或 5000-6000): " port
+                    read -p "请输入放行端口 (支持多端口/范围，例: 80,443,50000:60000): " port
                     if ! validate_port "$port"; then
-                        echo -e "${gl_hong}错误: 端口必须在 1-65535 之间，范围格式须前小后大 (例: 5000-6000)！${gl_bai}"
+                        echo -e "${gl_hong}错误: 端口格式不合法！${gl_bai}"
                         sleep 2
                         continue
                     fi
-                    read -p "请输入协议 (tcp/udp/both，回车默认 both): " proto
-                    [ -z "$proto" ] && proto="both"
-                    if [[ "$port" =~ ^[0-9-]+$ ]] && [[ "$proto" =~ ^(tcp|udp|both)$ ]]; then
-                        echo "$proto $port" >> "$NFT_GLOBAL_LIST"
-                        rebuild_nftables
-                        echo -e "${gl_lv}规则已添加并生效！${gl_bai}"
-                    else
-                        echo -e "${gl_hong}格式错误！${gl_bai}"
-                    fi
+                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    
+                    read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
+                    case "$proto_input" in
+                        1|tcp) proto="tcp" ;;
+                        2|udp) proto="udp" ;;
+                        *) proto="both" ;;
+                    esac
+                    
+                    echo "$proto $port" >> "$NFT_GLOBAL_LIST"
+                    rebuild_nftables
+                    echo -e "${gl_lv}规则已添加并生效！${gl_bai}"
                     sleep 1
                 fi
                 ;;
@@ -239,21 +251,25 @@ nftables_management() {
                         sleep 2
                         continue
                     fi
-                    read -p "请输入要对其放行的端口: " port
+                    
+                    read -p "请输入放行端口 (支持多端口/范围，例: 80,443,50000:60000): " port
                     if ! validate_port "$port"; then
                         echo -e "${gl_hong}错误: 端口不合法！${gl_bai}"
                         sleep 2
                         continue
                     fi
-                    read -p "请输入协议 (tcp/udp/both，回车默认 both): " proto
-                    [ -z "$proto" ] && proto="both"
-                    if [ -n "$ip" ] && [ -n "$port" ]; then
-                        echo "$ip $proto $port" >> "$NFT_IP_LIST"
-                        rebuild_nftables
-                        echo -e "${gl_lv}定向放行已添加并生效！${gl_bai}"
-                    else
-                        echo -e "${gl_hong}输入无效！${gl_bai}"
-                    fi
+                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    
+                    read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
+                    case "$proto_input" in
+                        1|tcp) proto="tcp" ;;
+                        2|udp) proto="udp" ;;
+                        *) proto="both" ;;
+                    esac
+                    
+                    echo "$ip $proto $port" >> "$NFT_IP_LIST"
+                    rebuild_nftables
+                    echo -e "${gl_lv}定向放行已添加并生效！${gl_bai}"
                     sleep 1
                 fi
                 ;;
@@ -265,32 +281,26 @@ nftables_management() {
                     read -p "请选择 (1/2): " del_type
                     
                     if [ "$del_type" == "1" ]; then
-                        read -p "请输入要删除的 [端口号] 以移除对应的全局规则: " port
-                        # 1. 检查输入合法性
+                        read -p "请输入要删除的 [端口串] 以移除对应的全局规则: " port
                         if ! validate_port "$port"; then
                             echo -e "${gl_hong}错误: 端口格式不合法！${gl_bai}"
-                        # 2. 检查记录是否存在
-                        elif grep -q " ${port}$" "$NFT_GLOBAL_LIST" 2>/dev/null; then
-                            sed -i "/ ${port}$/d" "$NFT_GLOBAL_LIST"
+                        elif grep -q " ${VALIDATED_PORT}$" "$NFT_GLOBAL_LIST" 2>/dev/null; then
+                            sed -i "/ ${VALIDATED_PORT}$/d" "$NFT_GLOBAL_LIST"
                             rebuild_nftables
-                            echo -e "${gl_lv}包含端口 ${port} 的全局规则已成功移除。${gl_bai}"
+                            echo -e "${gl_lv}包含端口 ${VALIDATED_PORT} 的全局规则已成功移除。${gl_bai}"
                         else
-                            # 3. 不存在时的反馈
-                            echo -e "${gl_huang}提示: 规则列表中未找到关于端口 ${port} 的记录。${gl_bai}"
+                            echo -e "${gl_huang}提示: 规则列表中未找到关于端口 ${VALIDATED_PORT} 的记录。${gl_bai}"
                         fi
                         
                     elif [ "$del_type" == "2" ]; then
                         read -p "请输入要删除的 [IP 地址] 以移除对应的定向规则: " ip
-                        # 1. 检查 IP 合法性
                         if ! validate_ip "$ip"; then
                             echo -e "${gl_hong}错误: IP 地址格式不合法！${gl_bai}"
-                        # 2. 检查记录是否存在
                         elif grep -q "^${ip} " "$NFT_IP_LIST" 2>/dev/null; then
                             sed -i "/^${ip} /d" "$NFT_IP_LIST"
                             rebuild_nftables
                             echo -e "${gl_lv}包含 IP ${ip} 的定向规则已成功移除。${gl_bai}"
                         else
-                            # 3. 不存在时的反馈
                             echo -e "${gl_huang}提示: 规则列表中未找到关于 IP ${ip} 的记录。${gl_bai}"
                         fi
                     else
@@ -311,12 +321,11 @@ nftables_management() {
                         fi
                     else
                         echo -e "配置 Hy2 UDP 端口跳跃 (万箭归一)"
-                        read -p "请输入起始跳跃端口 (例: 10000): " start
-                        read -p "请输入结束跳跃端口 (例: 20000): " end
-                        read -p "请输入真实目标端口 (例: 443): " target                  
-                        # 使用我们新写的 validate_port 函数，并确保 start 小于 end
-                        if validate_port "$start" && validate_port "$end" && validate_port "$target" && [ "$start" -lt "$end" ]; then
-                            # 预警检查：防止跳跃范围误伤 546 端口
+                        read -p "请输入起始跳跃端口 (纯数字，例: 10000): " start
+                        read -p "请输入结束跳跃端口 (纯数字，例: 20000): " end
+                        read -p "请输入真实目标端口 (纯数字，例: 443): " target                  
+                        
+                        if validate_port "$start" && validate_port "$end" && validate_port "$target" && [ "$start" -lt "$end" ] 2>/dev/null; then
                             if [ "$start" -le 546 ] && [ "$end" -ge 546 ]; then
                                 echo -e "${gl_hong}警告: 范围包含了 IPv6 生命线 (UDP 546)，系统已拒绝该范围！${gl_bai}"
                             else
@@ -325,7 +334,7 @@ nftables_management() {
                                 echo -e "${gl_lv}端口跳跃引擎已启动！流量已被重定向至 $target。${gl_bai}"
                             fi
                         else
-                            echo -e "${gl_hong}端口格式错误！(请确保输入的是合法数字，且起始端口小于结束端口)${gl_bai}"
+                            echo -e "${gl_hong}端口格式错误！(请确保输入的是单端口纯数字，且起始小于结束)${gl_bai}"
                         fi
                     fi
                     sleep 2
