@@ -53,26 +53,32 @@ validate_ip() {
     return 1
 }
 
-# [核心引擎 升级版] 声明式重建 (集合化优雅排版)
+# [核心引擎 绝对安全稳定版] 声明式重建
 rebuild_nftables() {
     local ssh_p=$(detect_ssh_port)
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
-    # --- 1. 动态提取并拼接全局端口列表 ---
+    # --- 1. 动态提取并拼接全局端口列表 (使用最原始安全的拼接法) ---
     local tcp_ports=""
     local udp_ports=""
     while read proto port; do
         [ -z "$port" ] && continue
         if [ "$proto" == "tcp" ] || [ "$proto" == "both" ]; then
-            # 巧妙利用参数扩展：如果有旧值，就加逗号拼接
-            tcp_ports="${tcp_ports}${tcp_ports:+, }$port"
+            if [ -z "$tcp_ports" ]; then tcp_ports="$port"; else tcp_ports="$tcp_ports, $port"; fi
         fi
         if [ "$proto" == "udp" ] || [ "$proto" == "both" ]; then
-            udp_ports="${udp_ports}${udp_ports:+, }$port"
+            if [ -z "$udp_ports" ]; then udp_ports="$port"; else udp_ports="$udp_ports, $port"; fi
         fi
     done < "$NFT_GLOBAL_LIST"
 
-    # --- 2. 注入核心配置与集合 ---
+    # --- 2. 安全构建集合元素字符串 (防止生成多余括号引发报错) ---
+    local tcp_elements_str=""
+    [ -n "$tcp_ports" ] && tcp_elements_str="elements = { $tcp_ports }"
+    
+    local udp_elements_str=""
+    [ -n "$udp_ports" ] && udp_elements_str="elements = { $udp_ports }"
+
+    # --- 3. 注入核心配置与集合 ---
     cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
@@ -80,12 +86,21 @@ table inet my_firewall {}
 delete table inet my_firewall
 
 table inet my_firewall {
-    # [优雅声明] 全局端口池 (利用 Set 集合实现 O(1) 极速匹配)
-    set global_tcp { type inet_service; flags interval; ${tcp_ports:+elements = { $tcp_ports }; } }
-    set global_udp { type inet_service; flags interval; ${udp_ports:+elements = { $udp_ports }; } }
+    # [优雅声明] 全局端口池
+    set global_tcp { 
+        type inet_service
+        flags interval
+        $tcp_elements_str
+    }
+    set global_udp { 
+        type inet_service
+        flags interval
+        $udp_elements_str
+    }
 
     chain input {
-        type filter hook input priority -10; policy drop;
+        # 使用最标准的 priority 0 防止版本兼容性报错
+        type filter hook input priority 0; policy drop;
 
         # 基础通行证
         iif "lo" accept
@@ -100,12 +115,12 @@ table inet my_firewall {
         icmp type echo-request limit rate 5/second burst 10 packets accept
         icmpv6 type echo-request limit rate 5/second burst 10 packets accept
 
-        # === [集合放行区] 仅需两行，搞定所有全局端口 ===
+        # === [集合放行区] ===
         tcp dport @global_tcp accept
         udp dport @global_udp accept
 EOF
 
-    # === 3. 追加特殊规则 (Hy2 & 定向IP) ===
+    # === 4. 追加特殊规则 (Hy2 & 定向IP) ===
     if [ -f "$NFT_HY2_CONF" ]; then
         local target_port=$(awk '{print $3}' "$NFT_HY2_CONF")
         echo "        udp dport $target_port accept comment \"Hy2 Target Auto-Allow\"" >> /etc/nftables.conf
@@ -117,7 +132,6 @@ EOF
         local ip_type="ip"
         [[ "$ip" =~ ":" ]] && ip_type="ip6"
         
-        # 将逗号分隔的端口直接包装成匿名集合 { }
         local nft_port="$port"
         [[ "$port" =~ "," ]] && nft_port="{ $port }"
         
@@ -129,7 +143,7 @@ EOF
         fi
     done < "$NFT_IP_LIST"
 
-    # === 4. 幽灵日志与封口 ===
+    # === 5. 幽灵日志与封口 ===
     cat >> /etc/nftables.conf << 'EOF'
         
         # 兜底拦截日志
@@ -152,8 +166,9 @@ EOF
 
     echo "}" >> /etc/nftables.conf
     
-    # 无感应用规则
+    # 强制重载并唤醒防火墙
     nft -f /etc/nftables.conf
+    systemctl restart nftables
     systemctl enable nftables >/dev/null 2>&1
 }
 
