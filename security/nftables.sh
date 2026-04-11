@@ -58,7 +58,7 @@ rebuild_nftables() {
     local ssh_p=$(detect_ssh_port)
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
-    # --- 1. 动态提取并拼接全局端口列表 (使用最原始安全的拼接法) ---
+    # --- 1. 动态提取并拼接全局端口列表 ---
     local tcp_ports=""
     local udp_ports=""
     while read proto port; do
@@ -71,39 +71,42 @@ rebuild_nftables() {
         fi
     done < "$NFT_GLOBAL_LIST"
 
-    # --- 2. 安全构建集合元素字符串 (防止生成多余括号引发报错) ---
     local tcp_elements_str=""
     [ -n "$tcp_ports" ] && tcp_elements_str="elements = { $tcp_ports }"
     
     local udp_elements_str=""
     [ -n "$udp_ports" ] && udp_elements_str="elements = { $udp_ports }"
 
-    # --- 3. 注入核心配置与集合 ---
+    # --- 2. 注入核心配置与集合 ---
     cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
+# 优雅销毁旧表
 table inet my_firewall {}
 delete table inet my_firewall
+table ip my_nat {}
+delete table ip my_nat
 
+# ==========================================
+# 核心过滤表 (Filter)
+# ==========================================
 table inet my_firewall {
     # [优雅声明] 全局端口池
     set global_tcp { 
-        type inet_service
-        flags interval
-        $tcp_elements_str
+        type inet_service; flags interval; $tcp_elements_str 
     }
     set global_udp { 
-        type inet_service
-        flags interval
-        $udp_elements_str
+        type inet_service; flags interval; $udp_elements_str 
     }
 
     chain input {
-        # 使用最标准的 priority 0 防止版本兼容性报错
         type filter hook input priority 0; policy drop;
 
-        # 基础通行证
-        iif "lo" accept
+        # --- [完美修复 1] 通用虚拟网卡与回环放行 ---
+        # 支持前缀匹配，即使没装 Docker/Tailscale 也不会报错
+        iifname { "lo", "docker*", "br-*", "tailscale*", "wg*" } accept
+
+        # 状态跟踪 (放行内部主动发起连接的回程流量)
         ct state established,related accept
         ct state invalid drop
         ct state new tcp flags & (fin|syn|rst|ack) != syn drop
@@ -120,7 +123,7 @@ table inet my_firewall {
         udp dport @global_udp accept
 EOF
 
-    # === 4. 追加特殊规则 (Hy2 & 定向IP) ===
+    # === 3. 追加特殊规则 (Hy2 & 定向IP) ===
     if [ -f "$NFT_HY2_CONF" ]; then
         local target_port=$(awk '{print $3}' "$NFT_HY2_CONF")
         echo "        udp dport $target_port accept comment \"Hy2 Target Auto-Allow\"" >> /etc/nftables.conf
@@ -143,15 +146,24 @@ EOF
         fi
     done < "$NFT_IP_LIST"
 
-    # === 5. 幽灵日志与封口 ===
+    # === 4. 防洪日志与 FORWARD 转发链 ===
     cat >> /etc/nftables.conf << 'EOF'
         
-        # 兜底拦截日志
-        log prefix "[Nftables-Block] " level info
+        # --- [完美修复 3] 防洪日志 ---
+        # 限制每分钟最多记录 3 条，防恶意扫描导致硬盘爆满
+        limit rate 3/minute burst 5 packets log prefix "[Nftables-Block] " level warn
+    }
+
+    # --- [完美修复 2] 容器转发链 (FORWARD) ---
+    # 没有这条链，Docker 和虚拟网卡能和宿主机通信，但出不了公网
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+        ct state established,related accept
+        iifname { "docker*", "br-*", "tailscale*", "wg*" } accept
     }
 EOF
 
-    # [扩展] 注入 Hy2 端口跳跃 (动态 Prerouting 链)
+    # [扩展] 注入 Hy2 端口跳跃
     if [ -f "$NFT_HY2_CONF" ]; then
         read start end target < "$NFT_HY2_CONF"
         cat >> /etc/nftables.conf << EOF
@@ -165,6 +177,22 @@ EOF
     fi
 
     echo "}" >> /etc/nftables.conf
+
+    # ==========================================
+    # 独立 NAT 伪装表 (通用内网出海)
+    # ==========================================
+    cat >> /etc/nftables.conf << 'EOF'
+table ip my_nat {
+    chain postrouting {
+        type nat hook postrouting priority 100; policy accept;
+        
+        # --- [完美修复 4] 自动化 NAT 伪装 ---
+        # 只针对局域网 IP 出站进行 MASQUERADE
+        # 覆盖范围: Docker(172.16.x.x), Tailscale(100.x.x.x), 常用内网(192.168/10.x.x.x)
+        ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } masquerade
+    }
+}
+EOF
     
     # 强制重载并唤醒防火墙
     nft -f /etc/nftables.conf
