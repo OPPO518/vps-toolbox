@@ -1,34 +1,55 @@
 #!/bin/bash
 
-# ==========================================
-#  通用防火墙模块 (Nftables 终极解耦与集合版)
-# ==========================================
+# =================================================================
+#  企业级 Nftables 核心网关引擎 (Docker/Tailscale 完美融合版)
+#  版本: V1.0 (Production Ready)
+# =================================================================
 
-NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port (例: tcp 80,443,5000-6000)
-NFT_IP_LIST="/etc/nft_ip_ports.list"          # 格式: ip proto port (例: 1.1.1.1 tcp 3306)
-NFT_HY2_CONF="/etc/nft_hy2_hop.conf"          # 格式: start end target (例: 10000 20000 443)
+# --- 颜色与样式定义 ---
+gl_hong='\033[31m'
+gl_lv='\033[32m'
+gl_huang='\033[33m'
+gl_kjlan='\033[36m'
+gl_bai='\033[0m'
+gl_hui='\033[90m'
 
-# [核心安全] 动态获取真实 SSH 端口
-detect_ssh_port() {
-    local port=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' | head -n 1)
-    echo "${port:-22}"
+# --- 核心配置文件路径 ---
+NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port
+NFT_IP_LIST="/etc/nft_ip_ports.list"          # 格式: ip proto port
+NFT_HY2_CONF="/etc/nft_hy2_hop.conf"          # 格式: start end target
+
+# [核心补丁] 开启系统内核网络转发 (打通 Docker 与 VPN 的任督二脉)
+enable_kernel_forwarding() {
+    local changed=0
+    if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then
+        echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-ip-forward.conf
+        changed=1
+    fi
+    if [ "$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)" != "1" ]; then
+        echo "net.ipv6.conf.all.forwarding = 1" >> /etc/sysctl.d/99-ip-forward.conf
+        changed=1
+    fi
+    if [ "$changed" -eq 1 ]; then
+        sysctl -p /etc/sysctl.d/99-ip-forward.conf >/dev/null 2>&1
+    fi
 }
 
-# [输入校验 升级版] 验证端口合法性 (支持混合输入: 80, 443, 55000:60000)
+# [防失联进阶] 动态获取真实 SSH 端口 (支持多端口提取)
+detect_ssh_port() {
+    local ports=$(sshd -T 2>/dev/null | grep -i '^port ' | awk '{print $2}' | paste -sd "," -)
+    echo "${ports:-22}"
+}
+
+# [输入校验] 验证端口合法性
 validate_port() {
     local raw_input="$1"
-    
-    # [清洗] 1. 去除所有空格 2. 把中文逗号换成英文逗号 3. 把冒号换成短横线
     local cleaned=$(echo "$raw_input" | tr -d ' ' | sed 's/，/,/g' | tr ':' '-')
     [ -z "$cleaned" ] && return 1
     
-    # 按照逗号分割，逐个校验
     IFS=',' read -r -a port_array <<< "$cleaned"
     for p in "${port_array[@]}"; do
-        # 如果是单端口
         if [[ "$p" =~ ^[0-9]+$ ]]; then
             if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then return 1; fi
-        # 如果是端口范围
         elif [[ "$p" =~ ^[0-9]+-[0-9]+$ ]]; then
             local p1=$(echo "$p" | cut -d'-' -f1)
             local p2=$(echo "$p" | cut -d'-' -f2)
@@ -36,16 +57,15 @@ validate_port() {
                 return 1
             fi
         else
-            return 1 # 格式既不是单端口也不是规范范围
+            return 1
         fi
     done
     
-    # 校验全部通过，导出清洗后的标准格式，供外部使用
     VALIDATED_PORT="$cleaned"
     return 0
 }
 
-# [输入校验] 验证 IP 地址合法性 (粗略但安全地拦截乱码)
+# [输入校验] 验证 IP 地址合法性
 validate_ip() {
     local ip=$1
     if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
@@ -53,15 +73,18 @@ validate_ip() {
     return 1
 }
 
-# [核心引擎 绝对安全稳定版] 声明式重建
+# =================================================================
+# [核心引擎] 声明式重建与原子级重载
+# =================================================================
 rebuild_nftables() {
+    enable_kernel_forwarding
     local ssh_p=$(detect_ssh_port)
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
-    # --- 1. 动态提取并拼接全局端口列表 ---
+    # --- 1. 动态提取全局端口 (修复末行吞噬 Bug) ---
     local tcp_ports=""
     local udp_ports=""
-    while read proto port; do
+    while read proto port || [ -n "$proto" ]; do
         [ -z "$port" ] && continue
         if [ "$proto" == "tcp" ] || [ "$proto" == "both" ]; then
             if [ -z "$tcp_ports" ]; then tcp_ports="$port"; else tcp_ports="$tcp_ports, $port"; fi
@@ -77,21 +100,20 @@ rebuild_nftables() {
     local udp_elements_str=""
     [ -n "$udp_ports" ] && udp_elements_str="elements = { $udp_ports }"
 
-    # --- 2. 注入核心配置与集合 ---
+    # --- 2. 注入核心配置 ---
     cat > /etc/nftables.conf << EOF
 #!/usr/sbin/nft -f
 
-# 优雅销毁旧表
+# [优雅销毁] 仅销毁自己的表，绝对不碰 Docker 和 Fail2Ban 的表
 table inet my_firewall {}
 delete table inet my_firewall
-table ip my_nat {}
-delete table ip my_nat
+table inet my_nat {}
+delete table inet my_nat
 
 # ==========================================
-# 核心过滤表 (Filter)
+# 核心过滤表 (主防火墙)
 # ==========================================
 table inet my_firewall {
-    # [优雅声明] 全局端口池
     set global_tcp { 
         type inet_service; flags interval; $tcp_elements_str 
     }
@@ -99,42 +121,41 @@ table inet my_firewall {
         type inet_service; flags interval; $udp_elements_str 
     }
 
+    # === 入站流量控制 (INPUT) ===
     chain input {
         type filter hook input priority 0; policy drop;
 
-        # --- [完美修复 1] 通用虚拟网卡与回环放行 ---
-        # 支持前缀匹配，即使没装 Docker/Tailscale 也不会报错
+        # 宿主机核心网卡与内部虚拟网卡放行
         iifname { "lo", "docker*", "br-*", "tailscale*", "wg*" } accept
 
-        # 状态跟踪 (放行内部主动发起连接的回程流量)
+        # 状态跟踪
         ct state established,related accept
         ct state invalid drop
         ct state new tcp flags & (fin|syn|rst|ack) != syn drop
 
-        # [防失联与生命线]
-        tcp dport $ssh_p accept
+        # 防失联与 IPv6 生命线 (支持多 SSH 端口)
+        tcp dport { $ssh_p } accept
         udp dport 546 accept
         icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
         icmp type echo-request limit rate 5/second burst 10 packets accept
         icmpv6 type echo-request limit rate 5/second burst 10 packets accept
 
-        # === [集合放行区] ===
+        # 集合放行区
         tcp dport @global_tcp accept
         udp dport @global_udp accept
 EOF
 
-    # === 3. 追加特殊规则 (Hy2 & 定向IP) ===
+    # === 3. 定向 IP 放行 (修复末行吞噬 Bug) ===
     if [ -f "$NFT_HY2_CONF" ]; then
         local target_port=$(awk '{print $3}' "$NFT_HY2_CONF")
         echo "        udp dport $target_port accept comment \"Hy2 Target Auto-Allow\"" >> /etc/nftables.conf
     fi
 
     echo "        # === 定向 IP 放行区 ===" >> /etc/nftables.conf
-    while read ip proto port; do
+    while read ip proto port || [ -n "$proto" ]; do
         [ -z "$port" ] && continue
         local ip_type="ip"
         [[ "$ip" =~ ":" ]] && ip_type="ip6"
-        
         local nft_port="$port"
         [[ "$port" =~ "," ]] && nft_port="{ $port }"
         
@@ -146,29 +167,30 @@ EOF
         fi
     done < "$NFT_IP_LIST"
 
-    # === 4. 防洪日志与 FORWARD 转发链 ===
+    # === 4. 转发链与防洪日志 ===
     cat >> /etc/nftables.conf << 'EOF'
         
-        # --- [完美修复 3] 防洪日志 ---
-        # 限制每分钟最多记录 3 条，防恶意扫描导致硬盘爆满
+        # 防洪日志
         limit rate 3/minute burst 5 packets log prefix "[Nftables-Block] " level warn
     }
 
-    # --- [完美修复 2] 容器转发链 (FORWARD) ---
-    # 没有这条链，Docker 和虚拟网卡能和宿主机通信，但出不了公网
+    # === 转发控制 (FORWARD) ===
     chain forward {
         type filter hook forward priority 0; policy drop;
         ct state established,related accept
+        
+        # [核心补丁] 允许容器/VPN 主动出海访问外部
         iifname { "docker*", "br-*", "tailscale*", "wg*" } accept
+        
+        # [核心补丁] 允许外部请求被转发给 Docker (保障 -p 端口映射存活)
+        oifname { "docker*", "br-*" } accept
     }
 EOF
 
-    # [扩展] 注入 Hy2 端口跳跃
+    # === 5. Hy2 端口跳跃 ===
     if [ -f "$NFT_HY2_CONF" ]; then
         read start end target < "$NFT_HY2_CONF"
         cat >> /etc/nftables.conf << EOF
-
-    # [万箭归一] Hy2 端口重定向
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
         udp dport $start-$end redirect to :$target
@@ -179,33 +201,35 @@ EOF
     echo "}" >> /etc/nftables.conf
 
     # ==========================================
-    # 独立 NAT 伪装表 (通用内网出海)
+    # 双栈 NAT 伪装表 (IPv4 + IPv6)
     # ==========================================
     cat >> /etc/nftables.conf << 'EOF'
-table ip my_nat {
+table inet my_nat {
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
         
-        # --- [完美修复 4] 自动化 NAT 伪装 ---
-        # 只针对局域网 IP 出站进行 MASQUERADE
-        # 覆盖范围: Docker(172.16.x.x), Tailscale(100.x.x.x), 常用内网(192.168/10.x.x.x)
-        ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } masquerade
+        # IPv4 虚拟网段伪装 (含 CGNAT/Tailscale)
+        meta nfproto ipv4 ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } masquerade
+        
+        # IPv6 局域网段伪装 (解决容器 v6 出海问题)
+        meta nfproto ipv6 ip6 saddr fc00::/7 masquerade
     }
 }
 EOF
     
-    # 强制重载并唤醒防火墙
+    # [最高机密] 原子级无感热重载！绝不能用 systemctl restart
     nft -f /etc/nftables.conf
-    systemctl restart nftables
     systemctl enable nftables >/dev/null 2>&1
 }
 
-# [UI 模块] 规则展示
+# =================================================================
+# UI 交互模块
+# =================================================================
 list_rules_ui() {
-    echo -e "${gl_huang}=== 通用防火墙防护面板 ===${gl_bai}"
-    echo -e "底层拦截: ${gl_lv}Priority -10 | Policy Drop [✔ 抢占成功]${gl_bai}"
-    echo -e "防自锁层: ${gl_lv}SSH Port $(detect_ssh_port) [✔ 已强制放行]${gl_bai}"
-    echo -e "V6生命线: ${gl_lv}ICMPv6 & UDP 546 [✔ 适配 Oracle]${gl_bai}"
+    echo -e "${gl_huang}=== 企业级防火墙核心调度面板 ===${gl_bai}"
+    echo -e "底层拦截: ${gl_lv}Priority 0 | Policy Drop [✔ 抢占成功]${gl_bai}"
+    echo -e "防自锁层: ${gl_lv}SSH Port(s) $(detect_ssh_port) [✔ 已强制放行]${gl_bai}"
+    echo -e "容器生态: ${gl_lv}Forward Chain [✔ 深度兼容 Docker/VPN]${gl_bai}"
     echo "------------------------------------------------"
     
     echo -e "${gl_kjlan}[1] 全网放行端口 (Global):${gl_bai}"
@@ -248,7 +272,7 @@ nftables_management() {
             echo -e " 当前状态: ${gl_hong}未初始化 (裸奔状态)${gl_bai}"
             echo -e " 核心逻辑: 仅保护 SSH 与 IPv6 生命线，不干涉转发"
             echo -e "------------------------------------------------"
-            echo -e "${gl_lv} 1.${gl_bai} 一键初始化并开启护盾"
+            echo -e "${gl_lv} 1.${gl_bai} 一键初始化并开启企业护盾"
         fi
         
         echo -e "${gl_hui} 0. 返回主菜单${gl_bai}"
@@ -259,10 +283,10 @@ nftables_management() {
         case "$nf_choice" in
             1) 
                 if ! nft list tables | grep -q "my_firewall"; then
-                    echo -e "${gl_huang}>>> 正在初始化沙盒防火墙...${gl_bai}"
+                    echo -e "${gl_huang}>>> 正在初始化核心沙盒...${gl_bai}"
                     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
                     rebuild_nftables
-                    echo -e "${gl_lv}初始化完成！${gl_bai}"
+                    echo -e "${gl_lv}初始化完成！已无缝接管流量。${gl_bai}"
                     sleep 1
                 else
                     read -p "请输入放行端口 (支持多端口/范围，例: 80,443,50000:60000): " port
@@ -271,7 +295,7 @@ nftables_management() {
                         sleep 2
                         continue
                     fi
-                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    port="$VALIDATED_PORT"
                     
                     read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
                     case "$proto_input" in
@@ -282,7 +306,7 @@ nftables_management() {
                     
                     echo "$proto $port" >> "$NFT_GLOBAL_LIST"
                     rebuild_nftables
-                    echo -e "${gl_lv}规则已添加并生效！${gl_bai}"
+                    echo -e "${gl_lv}规则已添加并热重载生效！${gl_bai}"
                     sleep 1
                 fi
                 ;;
@@ -301,7 +325,7 @@ nftables_management() {
                         sleep 2
                         continue
                     fi
-                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    port="$VALIDATED_PORT"
                     
                     read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
                     case "$proto_input" in
@@ -312,7 +336,7 @@ nftables_management() {
                     
                     echo "$ip $proto $port" >> "$NFT_IP_LIST"
                     rebuild_nftables
-                    echo -e "${gl_lv}定向放行已添加并生效！${gl_bai}"
+                    echo -e "${gl_lv}定向放行已添加并热重载生效！${gl_bai}"
                     sleep 1
                 fi
                 ;;
@@ -330,21 +354,21 @@ nftables_management() {
                         elif grep -q " ${VALIDATED_PORT}$" "$NFT_GLOBAL_LIST" 2>/dev/null; then
                             sed -i "/ ${VALIDATED_PORT}$/d" "$NFT_GLOBAL_LIST"
                             rebuild_nftables
-                            echo -e "${gl_lv}包含端口 ${VALIDATED_PORT} 的全局规则已成功移除。${gl_bai}"
+                            echo -e "${gl_lv}全局规则已移除并热重载。${gl_bai}"
                         else
-                            echo -e "${gl_huang}提示: 规则列表中未找到关于端口 ${VALIDATED_PORT} 的记录。${gl_bai}"
+                            echo -e "${gl_huang}提示: 未找到该端口记录。${gl_bai}"
                         fi
                         
                     elif [ "$del_type" == "2" ]; then
-                        read -p "请输入要删除的 [IP 地址] 以移除对应的定向规则: " ip
+                        read -p "请输入要删除的 [IP 地址]: " ip
                         if ! validate_ip "$ip"; then
                             echo -e "${gl_hong}错误: IP 地址格式不合法！${gl_bai}"
                         elif grep -q "^${ip} " "$NFT_IP_LIST" 2>/dev/null; then
                             sed -i "/^${ip} /d" "$NFT_IP_LIST"
                             rebuild_nftables
-                            echo -e "${gl_lv}包含 IP ${ip} 的定向规则已成功移除。${gl_bai}"
+                            echo -e "${gl_lv}定向规则已移除并热重载。${gl_bai}"
                         else
-                            echo -e "${gl_huang}提示: 规则列表中未找到关于 IP ${ip} 的记录。${gl_bai}"
+                            echo -e "${gl_huang}提示: 未找到该 IP 记录。${gl_bai}"
                         fi
                     else
                         echo -e "${gl_hong}无效的选择！${gl_bai}"
@@ -360,7 +384,7 @@ nftables_management() {
                         if [[ "$close_hop" == "y" ]]; then
                             rm -f "$NFT_HY2_CONF"
                             rebuild_nftables
-                            echo -e "${gl_lv}已销毁跳跃引擎。${gl_bai}"
+                            echo -e "${gl_lv}已销毁跳跃引擎并热重载。${gl_bai}"
                         fi
                     else
                         echo -e "配置 Hy2 UDP 端口跳跃 (万箭归一)"
@@ -374,10 +398,10 @@ nftables_management() {
                             else
                                 echo "$start $end $target" > "$NFT_HY2_CONF"
                                 rebuild_nftables
-                                echo -e "${gl_lv}端口跳跃引擎已启动！流量已被重定向至 $target。${gl_bai}"
+                                echo -e "${gl_lv}跳跃引擎启动！已热重载生效。${gl_bai}"
                             fi
                         else
-                            echo -e "${gl_hong}端口格式错误！(请确保输入的是单端口纯数字，且起始小于结束)${gl_bai}"
+                            echo -e "${gl_hong}端口格式错误！(起始必须小于结束)${gl_bai}"
                         fi
                     fi
                     sleep 2
@@ -385,19 +409,23 @@ nftables_management() {
                 ;;
             8) 
                 if nft list tables | grep -q "my_firewall"; then
-                    echo -e "${gl_hong}警告: 这将完全关闭防火墙 (裸奔模式)！${gl_bai}"
+                    echo -e "${gl_hong}警告: 这将完全关闭主防火墙 (但保留第三方表)！${gl_bai}"
                     read -p "确定卸载吗？(y/n): " confirm
                     if [[ "$confirm" == "y" ]]; then
                         nft delete table inet my_firewall 2>/dev/null
+                        nft delete table inet my_nat 2>/dev/null
                         rm -f "$NFT_GLOBAL_LIST" "$NFT_IP_LIST" "$NFT_HY2_CONF" /etc/nftables.conf
                         systemctl disable nftables 2>/dev/null
-                        echo -e "${gl_lv}门卫已撤离，系统回归开放状态。${gl_bai}"
+                        echo -e "${gl_lv}核心门卫已撤离，系统回归开放状态。${gl_bai}"
                         sleep 1
                     fi
                 fi
                 ;;
-            0) return ;;
+            0) exit 0 ;;
             *) echo -e "${gl_hong}无效选项${gl_bai}"; sleep 1 ;;
         esac
     done
 }
+
+# 启动入口
+nftables_management
