@@ -1,17 +1,9 @@
 #!/bin/bash
 
 # =================================================================
-#  企业级 Nftables 核心网关引擎 (Docker/Tailscale 完美融合版)
-#  版本: V1.1 (Framework Integrated)
+#  企业级 Nftables 核心网关引擎 (纯净模块化版)
+#  依赖: 必须由主框架 (x.sh) source 调用，并由其提供颜色变量
 # =================================================================
-
-# --- 颜色与样式定义 ---
-gl_hong='\033[31m'
-gl_lv='\033[32m'
-gl_huang='\033[33m'
-gl_kjlan='\033[36m'
-gl_bai='\033[0m'
-gl_hui='\033[90m'
 
 # --- 核心配置文件路径 ---
 NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port
@@ -67,7 +59,7 @@ rebuild_nftables() {
     local ssh_p=$(detect_ssh_port)
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
-    # --- 1. 动态提取并拼接全局端口列表 (修复末行吞噬 Bug) ---
+    # --- 1. 动态提取并拼接全局端口列表 ---
     local tcp_ports=""
     local udp_ports=""
     while read proto port || [ -n "$proto" ]; do
@@ -100,7 +92,6 @@ delete table inet my_nat
 # 核心过滤表 (Filter)
 # ==========================================
 table inet my_firewall {
-    # [优雅声明] 全局端口池
     set global_tcp { 
         type inet_service; flags interval; $tcp_elements_str 
     }
@@ -157,7 +148,7 @@ EOF
     # === 4. 防洪日志与 FORWARD 转发链 ===
     cat >> /etc/nftables.conf << 'EOF'
         
-        # --- [完美修复 3] 防洪日志 ---
+        # 防洪日志
         limit rate 3/minute burst 5 packets log prefix "[Nftables-Block] " level warn
     }
 
@@ -197,19 +188,21 @@ table inet my_nat {
     chain postrouting {
         type nat hook postrouting priority 100; policy accept;
         
-        # --- [完美修复 4] 自动化 NAT 伪装 (含 IPv6) ---
+        # 自动化 NAT 伪装 (含 IPv6)
         meta nfproto ipv4 ip saddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 } masquerade
         meta nfproto ipv6 ip6 saddr fc00::/7 masquerade
     }
 }
 EOF
     
-    # [最高机密] 原子级无感热重载！绝不能用 systemctl restart，保护 Fail2Ban 和 Docker
+    # 原子级无感热重载！保护 Fail2Ban 和 Docker
     nft -f /etc/nftables.conf
     systemctl enable nftables >/dev/null 2>&1
 }
 
-# [UI 模块] 规则展示
+# =================================================================
+# UI 交互模块 (由主框架调用)
+# =================================================================
 list_rules_ui() {
     echo -e "${gl_huang}=== 通用防火墙防护面板 ===${gl_bai}"
     echo -e "底层拦截: ${gl_lv}Priority 0 | Policy Drop [✔ 抢占成功]${gl_bai}"
@@ -281,7 +274,7 @@ nftables_management() {
                         sleep 2
                         continue
                     fi
-                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    port="$VALIDATED_PORT"
                     
                     read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
                     case "$proto_input" in
@@ -311,7 +304,7 @@ nftables_management() {
                         sleep 2
                         continue
                     fi
-                    port="$VALIDATED_PORT" # 使用清洗后的标准格式
+                    port="$VALIDATED_PORT"
                     
                     read -p "请选择协议 [ 1=tcp | 2=udp | 回车默认 both ]: " proto_input
                     case "$proto_input" in
@@ -412,14 +405,3 @@ nftables_management() {
         esac
     done
 }
-
-# =================================================================
-# 框架挂载入口 (支持独立运行与 Source 调用)
-# =================================================================
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # 直接运行该脚本时，启动菜单
-    nftables_management
-else
-    # 被 x.sh 通过 source 调用时，仅注册函数，不自动执行
-    :
-fi
