@@ -18,21 +18,6 @@ NFT_GLOBAL_LIST="/etc/nft_global_ports.list"  # 格式: proto port
 NFT_IP_LIST="/etc/nft_ip_ports.list"          # 格式: ip proto port
 NFT_HY2_CONF="/etc/nft_hy2_hop.conf"          # 格式: start end target
 
-# [核心补丁] 开启系统内核网络转发 (打通 Docker 与 VPN 的任督二脉)
-enable_kernel_forwarding() {
-    local changed=0
-    if [ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]; then
-        echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-ip-forward.conf
-        changed=1
-    fi
-    if [ "$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)" != "1" ]; then
-        echo "net.ipv6.conf.all.forwarding = 1" >> /etc/sysctl.d/99-ip-forward.conf
-        changed=1
-    fi
-    if [ "$changed" -eq 1 ]; then
-        sysctl -p /etc/sysctl.d/99-ip-forward.conf >/dev/null 2>&1
-    fi
-}
 
 # [防失联进阶] 动态获取真实 SSH 端口 (支持多端口提取)
 detect_ssh_port() {
@@ -77,7 +62,6 @@ validate_ip() {
 # [核心引擎] 声明式重建与原子级重载
 # =================================================================
 rebuild_nftables() {
-    enable_kernel_forwarding
     local ssh_p=$(detect_ssh_port)
     touch "$NFT_GLOBAL_LIST" "$NFT_IP_LIST"
 
